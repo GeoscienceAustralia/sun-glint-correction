@@ -1,0 +1,37 @@
+#%Module########################################################################
+##
+## sunglint modulefile
+##
+
+proc ModulesHelp { } {
+    global version
+	puts stderr " Sunglint correction"
+	puts stderr " Version sunglint"
+    puts stderr "   Adds to the PATH variable to find the executables and libraries"
+    Version $version
+"
+}
+
+module-whatis   "Sunglint correction"
+
+
+
+# for Tcl script use only
+set version	sun_glint_correction
+
+# base path for sun_glint_correction module build
+set base	~/.digitalearthau/dea-env/20200713/local
+
+if { ! [is-loaded dea-env/20200713] } {
+    module load dea-env/20200713
+}
+
+# set python paths
+append-path PATH $base/bin
+prepend-path PYTHONPATH $base/lib/python3.6/site-packages
+
+if { [ module-info mode remove ] } {
+    module unload dea/20200713
+    remove-path PYTHONPATH $base/lib/python3.6/site-packages
+}
+
