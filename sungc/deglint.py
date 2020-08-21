@@ -1,63 +1,52 @@
 #!/usr/bin/env python3
 
-import re
 import os
 import sys
-import fiona
+import pathlib
 import rasterio
-import rasterio.mask
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from os.path import join as pjoin
 
 from scipy import stats
-from rasterio.warp import reproject, Resampling
-from visualise import enhanced_RGB_stretch, display_two_images
-from interactive import ROI_Selector
+from os.path import join as pjoin
+from rasterio.warp import Resampling
+
+import sungc.rasterio_funcs as rio_funcs
+from sungc.interactive import ROI_Selector
+from sungc.cox_munk_funcs import cm_sunglint
+from sungc.visualise import enhanced_RGB_stretch, display_image
 
 get_bandNums_int = lambda f: int(os.path.splitext(f)[0].split("-")[1])
 get_bandNums_str = lambda f: os.path.splitext(f)[0].split("-")[1]
 
 
 class GlintCorr:
-    def __init__(self, group_path, sensor, fmask_file=None):
+    def __init__(self, dc_dataset, product, fmask_file=None):
         """
         Initiate the sunglint correction class
 
         Parameters
         ----------
-        group_path: str
-            Path to S2-MSI/L8-OLI/WV2 folder
+        dc_dataset : datacube.model.Dataset
+            Datacube dataset object
 
-        sensor : str
-            Sensor = {
-                "LANDSAT_5",
-                "LANDSAT_7",
-                "LANDSAT_8",
-                "SENTINEL_2",
-                "WORLDVIEW_2"
-            }
-
-        fmask_file : str or None
-            mask image file (that can be opened with rasterio) that
-            classifies pixels as water, land, cloud etc.
-            if None then a search for the fmask.img file is performed.
+        product : str
+            Product name 
 
         Examples
         --------
-
-        deglint S2 bands using the Hedley et al. (2019) approach
-        >>> g = GlintCorr("/path/to/S2_folder", "sentinel-2")
-        >>> deglint_BList, tmp_files = g.deglint(algorithm="hedley")
-        >>> # deglint_BList = list of paths to deglinted bands
-        >>> # tmp_files = list of path to temporary files created
         """
-        self.sensor = sensor.lower()
-        self.group_path = group_path
-        self.fmask_file = fmask_file
+        self.product = product
+        prop_dict = dc_dataset.metadata_doc["properties"]
+        meas_dict = dc_dataset.metadata_doc["measurements"]
+        base_dir = dc_dataset.local_path.parent
 
-        # check the path
+        self.sensor = prop_dict["eo:platform"].lower()
+        self.group_path = dc_dataset.local_path.parent
+        self.overpass_datetime = prop_dict["datetime"]  # str
+
+        # check paths
         self.check_path_exists(self.group_path)
 
         # check the sensor
@@ -67,45 +56,50 @@ class GlintCorr:
         self.scale_factor = 10000.0
 
         # get list of tif files
-        self.bandList, self.band_ids = self.get_band_list()
+        self.bandList, self.band_ids, self.bandNames = self.get_band_list(meas_dict)
 
-        if self.fmask_file:
-            self.check_path_exists(self.fmask_file)
+        # get a useful output basename
+        # that a user may want to use
+        self.useful_obase = self.output_basename(self.bandList[0])
+
+        # get a useful deep-water ROI shapefil
+        self.obase_shp = self.useful_obase + "_deepWater_ROI.shp"
+
+        if fmask_file:
+            self.fmask_file = pathlib.PosixPath(fmask_file)
         else:
-            self.fmask_file = self.get_fmask()
+            self.fmask_file = self.group_path.joinpath(meas_dict["oa_fmask"]["path"])
 
-    def get_basename(self, filename):
-        """ Get a file's basename without extension """
-        return os.path.basename(os.path.splitext(filename)[0])
+        self.check_path_exists(self.fmask_file)
 
-    def get_resample_bandName(self, filename, spatialRes):
-        """ Get the basename of the resampled band """
-        if filename.lower().find("fmask") != -1:
-            # fmask has a different naming convention
-            out_base = "fmask-resmpl-{0}m.tif".format(spatialRes)
-        else:
-            out_base = "{0}-resmpl-{1}m.tif".format(
-                self.get_basename(filename), spatialRes
-            )
-        return out_base
+    def output_basename(self, filename):
+        """ Get a useful output basename """
+        return filename.stem.split("_final")[0]
+
+    def deglint_ofile(self, spatialRes, out_dir, visible_bfile):
+        """ Get deglint filename """
+        vis_bname = os.path.basename(os.path.splitext(visible_bfile)[0])
+        return pjoin(
+            out_dir, "{0}-deglint-{1}m.tif".format(vis_bname, spatialRes),
+        )
 
     def check_sensor(self):
         if (
-            (not self.sensor == "sentinel_2")
-            and (not self.sensor == "landsat_5")
-            and (not self.sensor == "landsat_6")
-            and (not self.sensor == "landsat_7")
-            and (not self.sensor == "landsat_8")
-            and (not self.sensor == "worldview_2")
+            (not self.sensor == "sentinel-2a")
+            and (not self.sensor == "sentinel-2b")
+            and (not self.sensor == "landsat-5")
+            and (not self.sensor == "landsat-7")
+            and (not self.sensor == "landsat-8")
+            and (not self.sensor == "worldview-2")
         ):
             raise Exception(
-                'sensor must be "sentinel_2", "landsat_5",'
-                '"landsat_7", "landsat_8" or "worldview-2"'
+                'sensor must be "sentinel-2", "landsat-5",'
+                '"landsat-7", "landsat-8" or "worldview-2"'
             )
 
     def check_path_exists(self, path):
         """ Checks if a path exists """
-        if not os.path.exists(path):
+        if not path.exists():
             raise Exception("\nError: {0} does not exist.".format(path))
 
     def check_bandNum_exist(self, bandNums, required_bandNums):
@@ -134,52 +128,71 @@ class GlintCorr:
                     )
                 )
 
-    def display_img(self, img):
+    def find_file(self, path, keyword):
         """
-        Displays an image using matplotlib
+        find a file in a directory (path) that
+        has a keyword in its filename
 
         Parameters
         ----------
-        img : numpy.ndarray
-            A 2-dimensional numpy array
+        path : str
+            Directory to search
+
+        keyword : str
+            keyword
 
         Returns
         -------
-        ax : <AxesSubplot> class
-           The axes of the matplotlib subplot
+        filename : None or str
+            filename
+            if None then file with keyword not found
         """
-        fig, ax = plt.subplots(nrows=1, ncols=1)
-        ax.imshow(img, interpolation="None")
-        ax.axis("off")
-        return ax
+        filename = None
+        for root, dirs, files in os.walk(path):
+            for f in files:
+                if f.find(keyword) != -1:
+                    filename = pjoin(root, f)
 
-    def get_band_list(self):
+        return filename
+
+    def get_band_list(self, meas_dict):
         """
         Get a list of tifs in self.group_path
 
+        Parameters
+        ----------
+        meas_dict : dict()
+            A dictionary containing product band names
+
         Returns
         -------
-        bandList : list of strings
-            A list of paths to band geotifs
+        bandList : list
+            A list of pathlib
 
         bandNums : list of strings
             A list of band numbers
+
+        bandNames : list of string
+            A list of band names
         """
         bandList = []
         bandNums = []
-        for root, dirs, files in os.walk(self.group_path):
-            for f in files:
-                if f.lower().endswith(".tif"):
-                    f_split = os.path.splitext(f)[0].split("-")
-                    if len(f_split) == 2:
-                        bandList.append(pjoin(root, f))
-                        bandNums.append(os.path.splitext(f)[0].split("-")[1])
+        bandNames = []
+        for key in meas_dict.keys():
+            key_spl = key.split("_")
+            if key_spl[0].find(self.product) != -1:
+                basename = meas_dict[key]["path"]
+                bnum = os.path.splitext(basename)[0][-2:].strip("0")
+
+                bandNames.append("_".join(key_spl[1:]))
+                bandNums.append(bnum)
+                bandList.append(self.group_path.joinpath(basename))
 
         if not bandList:
             raise Exception(
                 "Could not find any geotifs in '{0}'".format(self.group_path)
             )
-        return bandList, bandNums
+        return bandList, bandNums, bandNames
 
     def get_fmask(self):
         """
@@ -201,268 +214,6 @@ class GlintCorr:
             )
 
         return fmask_file
-
-    def resample_bands(
-        self,
-        bandList,
-        resample_spatialRes,
-        resample_option,
-        load=False,
-        save=True,
-        odir=None,
-    ):
-        """
-        Resample bands (listed in resample_bands) to the specified
-        spatial resolution using the specified resampling option
-        such as bilinear interpolation, nearest neighbour, cubic
-        etc. Bands have the option of being saved
-
-        Parameters
-        ----------
-        bandList : list
-            A list of paths to bands that will be resampled
-
-        resample_spatialRes : float > 0
-            The resampled spatial resolution
-
-        resample_option : <enum 'Resampling'> class
-            The Resampling.<> algorithm, e.g.
-            Resampling.nearest
-            Resampling.bilinear
-            Resampling.cubic
-            Resampling.cubic_spline
-            e.t.c
-
-        load : bool
-            if True
-                The resampled bands are returned as a numpy.ndarray
-                having dimensions of
-                [nRows, nCols] or [nBands, nRows, nCols]
-                
-            if False
-                The resampled bands are not returned
-
-        save : bool
-            if True
-                geotiff is saved into either
-                (a) odir (if specified), or;
-                (b) directory of ref_band (if odir=None)
-
-            if False
-                geotiff is not saved
-
-        odir : str or None
-            The directory where the resampled geotiff is
-            saved. if odir=None then ref_band directory
-            is used.
-
-        Returns
-        -------
-        resmpl_ofiles : list or None
-            A list of successful resampled bands that were saved.
-            resmpl_ofiles = None if save = False
-            
-        spectral_cube : numpy.ndarray or None
-            A numpy array containing the resampled bands
-            spectral_cube = None if load = False
-
-        metad : dict or None
-            A dictionary containing (modified) rasterio metadata
-            of spectral_cube.
-            metad = None if load = False
-
-        Raises
-        ------
-        Exception
-            * resample_spatialRes <= 0
-            * if save=True and odir does not exist.
-
-        Notes
-        -----
-         1) if load is False, then spectral_cube & metad are None
-         2) if load is True, then spectral_cube = numpy.ndarray
-            and metad = dict()
-         3) if save is False, then resmpl_ofiles = None
-         4) if save is True and resmpl_ofiles = []
-            then resampling was not successful for any listed bands
-
-        """
-        if resample_spatialRes <= 0:
-            raise Exception("\nresample_spatialRes must be a float > 0")
-
-        metad = None
-        data_type = None
-        spectral_cube = None
-        resmpl_ofiles = None
-
-        nBands = len(bandList)
-
-        if save:
-            resmpl_ofiles = []
-            if odir:
-                out_dir = odir
-                self.check_path_exists(out_dir)  # Exception if not exist
-            else:
-                out_dir = os.path.dirname(ref_band)
-
-        if load:
-            spectral_cube = []
-
-        # iterate through the list of bands to be resampled
-        for z in range(0, nBands):
-
-            with rasterio.open(bandList[z], "r") as src_ds:
-                data_type = np.dtype(src_ds.dtypes[0])
-                dwnscale_factor = resample_spatialRes / src_ds.transform.a
-                nRows = int(src_ds.height / dwnscale_factor)
-                nCols = int(src_ds.width / dwnscale_factor)
-
-                res_transform = src_ds.transform * src_ds.transform.scale(
-                    dwnscale_factor, dwnscale_factor
-                )
-
-                metad = src_ds.meta.copy()
-                metad["width"] = nCols
-                metad["height"] = nRows
-                metad["transform"] = res_transform
-
-                # do stuff to get ref_ds.transform, ref_ds.crs
-                # ref_ds.height, ref_ds.width
-                resmpl_band = np.zeros(
-                    [nRows, nCols], order="C", dtype=data_type
-                )
-
-                reproject(
-                    source=rasterio.band(src_ds, 1),
-                    destination=resmpl_band,
-                    src_transform=src_ds.transform,
-                    src_crs=src_ds.crs,
-                    dst_transform=res_transform,
-                    dst_crs=src_ds.crs,
-                    resampling=resample_option,
-                )
-
-                metad["band_{0}".format(z + 1)] = self.get_basename(
-                    bandList[z]
-                )
-
-                if load:
-                    spectral_cube.append(np.copy(resmpl_band))
-
-                if save:
-                    # save geotif
-                    resmpl_tif = pjoin(
-                        out_dir,
-                        self.get_resample_bandName(
-                            bandList[z], resample_spatialRes
-                        ),
-                    )
-
-                    with rasterio.open(resmpl_tif, "w", **metad) as dst:
-                        dst.write(resmpl_band, 1)
-
-                    if os.path.exists(resmpl_tif):
-                        # geotiff was successfully created.
-                        resmpl_ofiles.append(resmpl_tif)
-
-            # end-with src_ds
-        # end-for z
-
-        if load:
-            # update nBands in metadata
-            metad["count"] = nBands
-
-            if nBands == 1:
-                # return a 2-dimensional numpy.ndarray
-                spectral_cube = np.copy(spectral_cube[0])
-
-            else:
-                # return a 3-dimensional numpy.ndarray
-                spectral_cube = np.array(
-                    spectral_cube, order="C", dtype=data_type
-                )
-        else:
-            metad = None
-
-        # if load is False:
-        #     spectral_cube & metad are None
-        # if save is False:
-        #     resmpl_ofiles = None
-        # if (save is True) and (len(resmpl_ofiles) == 0):
-        #     resampling was not successful for any listed bands
-
-        return resmpl_ofiles, spectral_cube, metad
-
-    def load_fmask(self, fmask_file):
-        """
-        Loads the fmask.img file as a numpy.ndarray
-
-        Parameters
-        ----------
-        fmask_file : str
-            filename of the fmask.img
-        """
-        with rasterio.open(fmask_file, "r") as ds:
-            fmask_img = ds.read(1)
-        return fmask_img
-
-    def load_bands(self, band_list, apply_scaling):
-        """
-        load the bands in band_list into a 3D array.
-        
-        Parameters
-        ----------
-        band_list : list of paths
-            paths of bands to load. Note these bands
-            must be the same spatial resolution
-
-        apply_scaling : bool
-            if True, then the scale_factor is applied
-
-        Returns
-        -------
-        spectral_cube : numpy.ndarray
-            multi-band array with dimensions of
-            [nBands, nRows, nCols]
-        """
-        nBands = len(band_list)
-        spectral_cube = None
-        nodata_val = None
-        meta_dict = None
-        data_type = np.float32
-
-        for z in range(0, nBands):
-            with rasterio.open(band_list[z], "r") as ds:
-                if z == 0:
-                    if not apply_scaling:
-                        data_type = np.dtype(ds.dtypes[0])
-
-                    spectral_cube = np.zeros(
-                        [nBands, ds.height, ds.width],
-                        order="C",
-                        dtype=data_type,
-                    )
-                    meta_dict = ds.meta.copy()
-
-                band = np.array(ds.read(1), order="C", dtype=data_type)
-
-                nodata_val = float(ds.meta["nodata"])
-
-                if apply_scaling:
-                    band[
-                        (band > 0) & (band <= self.scale_factor)
-                    ] /= self.scale_factor
-
-                band[band > self.scale_factor] = nodata_val
-                band[band <= 0] = nodata_val
-
-                spectral_cube[z, :, :] = band
-                meta_dict["band_{0}".format(z + 1)] = self.get_basename(
-                    band_list[z]
-                )
-
-        meta_dict["count"] = nBands
-        return spectral_cube, meta_dict
 
     def quicklook_RGB(self, dwnscale_factor=3):
         """
@@ -501,17 +252,17 @@ class GlintCorr:
         if dwnscale_factor < 1:
             raise Exception("\ndwnscale_factor must be a float >= 1")
 
-        if (self.sensor == "sentinel_2") or (self.sensor == "landsat_8"):
+        if (self.sensor == "sentinel-2a") or (self.sensor == "sentinel-2b") or (self.sensor == "landsat-8"):
             ix_red = self.band_ids.index("4")
             ix_grn = self.band_ids.index("3")
             ix_blu = self.band_ids.index("2")
 
-        if (self.sensor == "landsat_5") or (self.sensor == "landsat_7"):
+        if (self.sensor == "landsat-5") or (self.sensor == "landsat-7"):
             ix_red = self.band_ids.index("3")
             ix_grn = self.band_ids.index("2")
             ix_blu = self.band_ids.index("1")
 
-        if self.sensor == "worldview_2":
+        if self.sensor == "worldview-2":
             ix_red = self.band_ids.index("5")
             ix_grn = self.band_ids.index("3")
             ix_blu = self.band_ids.index("2")
@@ -526,7 +277,7 @@ class GlintCorr:
 
         if dwnscale_factor > 1:
             # resample to quicklook spatial resolution
-            resmpl_tifs, refl_im, rio_meta = self.resample_bands(
+            resmpl_tifs, refl_im, rio_meta = rio_funcs.resample_bands(
                 rgb_bandList,
                 ql_spatialRes,
                 Resampling.nearest,
@@ -535,10 +286,12 @@ class GlintCorr:
                 odir=None,
             )
         else:
-            refl_im, rio_meta = self.load_bands(rgb_bandList, False)
+            refl_im, rio_meta = rio_funcs.load_bands(
+                rgb_bandList, self.scale_factor, False
+            )
 
         # resample fmask
-        resmpl_tifs, fmask_im, fmask_meta = self.resample_bands(
+        resmpl_tifs, fmask_im, fmask_meta = rio_funcs.resample_bands(
             [self.fmask_file],
             ql_spatialRes,
             Resampling.mode,
@@ -587,7 +340,7 @@ class GlintCorr:
         rgb_im, rgb_meta = self.quicklook_RGB(dwnscaling_factor)
 
         # let the user select a ROI from the 10m RGB
-        ax = self.display_img(rgb_im)
+        ax = display_image(rgb_im, None)
         mc = ROI_Selector(ax=ax)
         mc.interative()
         plt.show()
@@ -597,87 +350,6 @@ class GlintCorr:
 
         # close the ROI_Selector
         mc = None
-
-    def load_mask_from_shp(self, shp_file, ref_ds):
-        """
-        Load a mask containing geometries from a shapefile,
-        using a reference dataset
-
-        Parameters
-        ----------
-        shp_file : str
-            shapefile containing a polygon
-
-        ref_ds : dataset
-            A rasterio dataset of the reference band
-            that fmask will be resampled
-
-        Returns
-        -------
-        mask_im : numpy.ndarray
-            mask image
-
-        Notes
-        -----
-        1) Pixels outside of the polygon are assigned
-           as nodata in the mask
-        """
-        with fiona.open(shp_file, "r") as shp:
-            shapes = [feature["geometry"] for feature in shp]
-
-        # pixels outside polygon in roi_mask = nodata value
-        mask_im, mask_transform = rasterio.mask.mask(
-            dataset=ref_ds, shapes=shapes
-        )
-        if mask_im.ndim == 3:
-            mask_im = np.array(mask_im[0, :, :], order="K", copy=True)
-
-        return mask_im
-
-    def resample_band_to_ds(self, image_file, ref_ds, resample_option):
-        """
-        Resample fmask to a reference band given
-        by the rasterio dataset (ref_ds)
-
-        Parameters
-        ----------
-        image_file : str
-            filename of image to resample
-
-        ref_ds : dataset
-            A rasterio dataset of the reference band
-            that fmask will be resampled
-
-        resample_option : <enum 'Resampling'> class
-            The Resampling.<> algorithm, e.g.
-            Resampling.nearest
-            Resampling.bilinear
-            Resampling.cubic
-            Resampling.cubic_spline
-            e.t.c
-
-        Returns
-        -------
-        image : numpy.ndarray
-            2-Dimensional numpy array
-        """
-        with rasterio.open(image_file, "r") as src_ds:
-            image = np.zeros(
-                [ref_ds.height, ref_ds.width],
-                order="C",
-                dtype=np.dtype(src_ds.dtypes[0]),
-            )
-
-            reproject(
-                source=rasterio.band(src_ds, 1),
-                destination=image,
-                src_transform=src_ds.transform,
-                src_crs=src_ds.crs,
-                dst_transform=ref_ds.transform,
-                dst_crs=ref_ds.crs,
-                resampling=resample_option,
-            )
-        return image
 
     def gao_2007(
         self,
@@ -700,8 +372,10 @@ class GlintCorr:
             The NIR band number used to deglint the VIS bands in vis_band_ids
 
         odir : str
-            The path where the deglinted geotiff bands
-            are saved.
+            The path where the deglinted geotiff bands are saved.
+
+            if None then:
+            odir = pjoin(self.group_path, "DEGLINT", "GAO")
 
         waterVal : int
             The fmask value for water pixels (default = 5)
@@ -727,14 +401,14 @@ class GlintCorr:
             odir = pjoin(self.group_path, "DEGLINT", "GAO")
 
         if not os.path.exists(odir):
-            os.makedirs(odir)
+            os.makedirs(odir, exist_ok=True)
 
         # Check that the input vis bands exist
         self.check_bandNum_exist(self.band_ids, vis_band_ids)
         self.check_bandNum_exist(self.band_ids, [nir_band_id])
 
         ix_nir = self.band_ids.index(nir_band_id)
-        nir_bandPath = self.bandList[ix_nir]
+        nir_bandPath = str(self.bandList[ix_nir])
 
         # ------------------------------ #
         #       load the NIR band        #
@@ -752,42 +426,33 @@ class GlintCorr:
         for z in range(0, nBands):
 
             ix_vis = self.band_ids.index(vis_band_ids[z])
-            vis_bandPath = self.bandList[ix_vis]
+            vis_bandPath = str(self.bandList[ix_vis])
 
             # ------------------------------ #
             #        load visible band       #
             # ------------------------------ #
-            with rasterio.open(vis_bandPath, "r") as vis_ds:
-                vis_im = vis_ds.read(1)
+            with rasterio.open(vis_bandPath, "r") as dsVIS:
+                vis_im = dsVIS.read(1)
 
                 # get metadata and load NIR array
-                kwargs = vis_ds.meta.copy()
-                nRows = vis_ds.height
-                nCols = vis_ds.width
+                kwargs = dsVIS.meta.copy()
                 nodata = kwargs["nodata"]
-                vis_transform = vis_ds.transform
                 spatialRes = int(abs(kwargs["transform"].a))
 
-                deglint_otif = pjoin(
-                    odir,
-                    "{0}-deglint-{1}m.tif".format(
-                        self.get_basename(vis_bandPath), spatialRes,
-                    ),
-                )
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
                 # ------------------------------ #
-                fmask = self.resample_band_to_ds(
-                    self.fmask_file, vis_ds, Resampling.mode
+                fmask = rio_funcs.resample_band_to_ds(
+                    self.fmask_file, dsVIS, Resampling.mode
                 )
 
                 # ------------------------------ #
                 #       Resample NIR band        #
                 # ------------------------------ #
-                if (nir_nRows != nRows) or (nir_nCols != nCols):
+                if (nir_nRows != dsVIS.height) or (nir_nCols != dsVIS.width):
                     # resample the NIR band to match the VIS band
-                    nir_im = self.resample_band_to_ds(
-                        nir_bandPath, vis_ds, Resampling.bilinear
+                    nir_im = rio_funcs.resample_band_to_ds(
+                        nir_bandPath, dsVIS, Resampling.bilinear
                     )
 
             # ------------------------------ #
@@ -796,12 +461,16 @@ class GlintCorr:
             # copy band
             deglint_band = np.array(vis_im, order="K", copy=True)
 
-            waterIx = np.where(fmask == waterVal)
+            waterIx = np.where(
+                (fmask == waterVal) & (vis_im != nodata) & (nir_im != nodata)
+            )
 
             # 1. deglint water pixels
             deglint_band[waterIx] = vis_im[waterIx] - nir_im[waterIx]
+            deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
 
             # 2. write geotiff
+            deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
             with rasterio.open(deglint_otif, "w", **kwargs) as dst:
                 dst.write(deglint_band, 1)
 
@@ -849,6 +518,9 @@ class GlintCorr:
         odir : str
             The path where the deglinted geotiff bands
             and correlation plots (if specified) are saved.
+
+            if None then:
+            odir = pjoin(self.group_path, "DEGLINT", "HEDLEY")
 
         waterVal : int
             The fmask value for water pixels (default = 5)
@@ -900,7 +572,7 @@ class GlintCorr:
             odir = pjoin(self.group_path, "DEGLINT", "HEDLEY")
 
         if not os.path.exists(odir):
-            os.makedirs(odir)
+            os.makedirs(odir, exist_ok=True)
 
         # initiate plot if specified
         if plot:
@@ -911,7 +583,7 @@ class GlintCorr:
         self.check_bandNum_exist(self.band_ids, [nir_band_id])
 
         ix_nir = self.band_ids.index(nir_band_id)
-        nir_bandPath = self.bandList[ix_nir]
+        nir_bandPath = str(self.bandList[ix_nir])
 
         # ------------------------------ #
         #       load the NIR band        #
@@ -929,49 +601,44 @@ class GlintCorr:
         for z in range(0, nBands):
 
             ix_vis = self.band_ids.index(vis_band_ids[z])
-            vis_bandPath = self.bandList[ix_vis]
+            vis_bandPath = str(self.bandList[ix_vis])
 
             # ------------------------------ #
             #        load visible band       #
             # ------------------------------ #
-            with rasterio.open(vis_bandPath, "r") as vis_ds:
-                vis_im = vis_ds.read(1)
+            with rasterio.open(vis_bandPath, "r") as dsVIS:
+                vis_im = dsVIS.read(1)
 
                 # get metadata and load NIR array
-                kwargs = vis_ds.meta.copy()
-                nRows = vis_ds.height
-                nCols = vis_ds.width
+                kwargs = dsVIS.meta.copy()
                 nodata = kwargs["nodata"]
-                vis_transform = vis_ds.transform
                 spatialRes = int(abs(kwargs["transform"].a))
 
-                deglint_otif = pjoin(
-                    odir,
-                    "{0}-deglint-{1}m.tif".format(
-                        self.get_basename(vis_bandPath), spatialRes,
-                    ),
-                )
+                # ------------------------------ #
+                #       Resample NIR band        #
+                # ------------------------------ #
+                if (nir_nRows != dsVIS.height) or (nir_nCols != dsVIS.width):
+                    # resample the NIR band to match the VIS band
+                    nir_im = rio_funcs.resample_band_to_ds(
+                        nir_bandPath, dsVIS, Resampling.bilinear
+                    )
+
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
                 # ------------------------------ #
-                fmask = self.resample_band_to_ds(
-                    self.fmask_file, vis_ds, Resampling.mode
+                fmask = rio_funcs.resample_band_to_ds(
+                    self.fmask_file, dsVIS, Resampling.mode
                 )
 
                 # ------------------------------ #
                 #    Load shapefile as a mask    #
                 # ------------------------------ #
-                roi_mask = self.load_mask_from_shp(roi_shpfile, vis_ds)
-                roi_mask[(fmask != waterVal) & (vis_im == nodata)] = nodata
-
-                # ------------------------------ #
-                #       Resample NIR band        #
-                # ------------------------------ #
-                if (nir_nRows != nRows) or (nir_nCols != nCols):
-                    # resample the NIR band to match the VIS band
-                    nir_im = self.resample_band_to_ds(
-                        nir_bandPath, vis_ds, Resampling.bilinear
-                    )
+                roi_mask = rio_funcs.load_mask_from_shp(roi_shpfile, dsVIS)
+                roi_mask[
+                    (fmask != waterVal)
+                    | (vis_im == nodata)
+                    | (nir_im == nodata)
+                ] = nodata
 
             # ------------------------------ #
             #       Sunglint Correction      #
@@ -984,7 +651,9 @@ class GlintCorr:
             valid_NIR = nir_im[roi_valIx]
             minRefl_NIR = valid_NIR.min()
 
-            waterIx = np.where(fmask == waterVal)
+            waterIx = np.where(
+                (fmask == waterVal) & (vis_im != nodata) & (nir_im != nodata)
+            )
 
             # 2. Get correlations between current band and NIR
             x_vals = valid_NIR
@@ -997,8 +666,10 @@ class GlintCorr:
             deglint_band[waterIx] = vis_im[waterIx] - slope * (
                 nir_im[waterIx] - minRefl_NIR
             )
+            deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
 
             # 4. write geotiff
+            deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
             with rasterio.open(deglint_otif, "w", **kwargs) as dst:
                 dst.write(deglint_band, 1)
 
@@ -1068,4 +739,178 @@ class GlintCorr:
             # end-if plot
         # endfor z
 
+        return deglint_BandList
+    
+    def cox_munk(
+        self,
+        vis_band_ids,
+        odir=None,
+        vzen_file=None,
+        szen_file=None,
+        razi_file=None,
+        wind_speed=5,
+        waterVal=5,
+    ):
+        """
+        Performs the wind-direction-independent Cox and Munk (1954)
+        sunglint correction on the specified visible bands. This
+        algorithm is suitable for spatial resolutions between
+        100 - 1000 metres (Kay et al., 2009). Fresnel reflectance
+        of sunglint is assumed to be wavelength-independent.
+
+        Cox, C., Munk, W. 1954. Statistics of the Sea Surface Derived
+        from Sun Glitter. J. Mar. Res., 13, 198-227.
+
+        Cox, C., Munk, W. 1954. Measurement of the Roughness of the Sea
+        Surface from Photographs of the Suns Glitter. J. Opt. Soc. Am.,
+        44, 838-850.
+
+        Kay, S., Hedley, J. D., Lavender, S. 2009. Sun Glint Correction
+        of High and Low Spatial Resolution Images of Aquatic Scenes:
+        a Review of Methods for Visible and Near-Infrared Wavelengths.
+        Remote Sensing, 1, 697-730; doi:10.3390/rs1040697
+
+        Parameters
+        ----------
+        vis_band_ids : list
+            A list of band numbers in the visible that will be deglinted
+
+        odir : str or None
+            The path where the deglinted geotiff bands are saved.
+
+            if None then:
+            odir = pjoin(self.group_path, "DEGLINT", "COX_MUNK")
+
+        vzen_file : str or None
+            sensor view zenith (rasterio-openable) image file
+
+            * if None then the file containing "satellite-view.tif"
+              inside group_path is designated as the vzen_file
+
+        szen_file : str or None
+            solar zenith (rasterio-openable) image file
+
+            * if None then the file containing "solar-zenith.tif"
+              inside group_path is designated as the szen_file
+
+        razi_file : str or None
+            Relative azimuth (rasterio-openable) image file
+            Relative azimuth = solar_azimuth - sensor_azimuth
+
+            * if None then the file containing "relative-azimuth.tif"
+              inside group_path is designated as the razi_file
+
+        wind_speed : float
+            Wind speed (m/s)
+
+        waterVal : int
+            The fmask value for water pixels (default = 5)
+
+        Returns
+        -------
+        deglint_BandList : list
+            A list of paths to the deglinted geotiff bands
+
+        Raises
+        ------
+        Exception:
+            * if input arrays are not two-dimensional
+            * if dimension mismatch
+            * if wind_speed < 0
+        """
+        # create output directory
+        if not odir:
+            odir = pjoin(self.group_path, "DEGLINT", "COX_MUNK")
+
+        if not os.path.exists(odir):
+            os.makedirs(odir, exist_ok=True)
+
+        # --- check vzen_file --- #
+        if vzen_file:
+            self.check_path_exists(vzen_file)
+        else:
+            vzen_file = self.find_file(self.group_path, "satellite-view.tif")
+
+        # --- check szen_file --- #
+        if szen_file:
+            self.check_path_exists(szen_file)
+        else:
+            szen_file = self.find_file(self.group_path, "solar-zenith.tif")
+
+        # --- check razi_file --- #
+        if razi_file:
+            self.check_path_exists(razi_file)
+        else:
+            razi_file = self.find_file(self.group_path, "relative-azimuth.tif")
+
+        # Check that the input vis bands exist
+        self.check_bandNum_exist(self.band_ids, vis_band_ids)
+
+        # ------------------------------- #
+        #  Estimate sunglint reflectance  #
+        # ------------------------------- #
+
+        # load vzen, szen and razi
+        vzen_im, vzen_meta = rio_funcs.load_singleBand(vzen_file)
+        szen_im, szen_meta = rio_funcs.load_singleBand(szen_file)
+        razi_im, razi_meta = rio_funcs.load_singleBand(razi_file)
+
+        # cox and munk:
+        p_glint, p_fresnel = cm_sunglint(
+            view_zenith=vzen_im,
+            solar_zenith=szen_im,
+            relative_azimuth=razi_im,
+            wind_speed=wind_speed,
+            return_fresnel=False,
+        )
+        # if return_fresnel=True  then p_fresnel = numpy.ndarray
+        # if return_fresnel=False then p_fresnel = None
+
+        # ------------------------------ #
+        nBands = len(vis_band_ids)
+        deglint_BandList = []
+
+        for z in range(0, nBands):
+
+            ix_vis = self.band_ids.index(vis_band_ids[z])
+            vis_bandPath = self.bandList[ix_vis]
+
+            # ------------------------------ #
+            #        load visible band       #
+            # ------------------------------ #
+            with rasterio.open(vis_bandPath, "r") as dsVIS:
+                vis_im = dsVIS.read(1)
+
+                # get metadata
+                kwargs = dsVIS.meta.copy()
+                nodata = kwargs["nodata"]
+                spatialRes = int(abs(kwargs["transform"].a))
+
+                # ------------------------------ #
+                #  Resample and load fmask_file  #
+                # ------------------------------ #
+                fmask = rio_funcs.resample_band_to_ds(
+                    self.fmask_file, dsVIS, Resampling.mode
+                )
+
+            # ------------------------------ #
+            #       Sunglint Correction      #
+            # ------------------------------ #
+            # copy band
+            deglint_band = np.array(vis_im, order="K", copy=True)
+
+            waterIx = np.where((fmask == waterVal) & (vis_im != nodata))
+
+            # 1. deglint water pixels
+            deglint_band[waterIx] = vis_im[waterIx] - p_glint[waterIx]
+
+            # 2. write geotiff
+            deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
+            with rasterio.open(deglint_otif, "w", **kwargs) as dst:
+                dst.write(deglint_band, 1)
+
+            if os.path.exists(deglint_otif):
+                deglint_BandList.append(deglint_otif)
+
+        # endfor z
         return deglint_BandList
