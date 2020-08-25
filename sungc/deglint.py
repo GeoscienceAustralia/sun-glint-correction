@@ -634,11 +634,12 @@ class GlintCorr:
                 #    Load shapefile as a mask    #
                 # ------------------------------ #
                 roi_mask = rio_funcs.load_mask_from_shp(roi_shpfile, dsVIS)
-                roi_mask[
-                    (fmask != waterVal)
-                    | (vis_im == nodata)
-                    | (nir_im == nodata)
-                ] = nodata
+
+            flag_mask = (
+                (fmask != waterVal) | (vis_im == nodata) | (nir_im == nodata)
+            )
+            water_mask = ~flag_mask
+            roi_mask[flag_mask] = nodata
 
             # ------------------------------ #
             #       Sunglint Correction      #
@@ -651,10 +652,6 @@ class GlintCorr:
             valid_NIR = nir_im[roi_valIx]
             minRefl_NIR = valid_NIR.min()
 
-            waterIx = np.where(
-                (fmask == waterVal) & (vis_im != nodata) & (nir_im != nodata)
-            )
-
             # 2. Get correlations between current band and NIR
             x_vals = valid_NIR
             y_vals = vis_im[roi_valIx]
@@ -663,8 +660,8 @@ class GlintCorr:
             )
 
             # 3. deglint water pixels
-            deglint_band[waterIx] = vis_im[waterIx] - slope * (
-                nir_im[waterIx] - minRefl_NIR
+            deglint_band[water_mask] = vis_im[water_mask] - slope * (
+                nir_im[water_mask] - minRefl_NIR
             )
             deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
 
@@ -863,8 +860,16 @@ class GlintCorr:
             wind_speed=wind_speed,
             return_fresnel=False,
         )
-        # if return_fresnel=True  then p_fresnel = numpy.ndarray
-        # if return_fresnel=False then p_fresnel = None
+        # Notes:
+        #    * if return_fresnel=True  then p_fresnel = numpy.ndarray
+        #    * if return_fresnel=False then p_fresnel = None
+        #    * 0 <= p_glint   (np.float32) <= 1
+        #    * 0 <= p_fresnel (np.float32) <= 1
+
+        # In this implementation, the scale_factor (usually 10,000)
+        # will not be applied to minimise storage of deglinted
+        # bands. Hence, we need to multiply p_glint by this factor
+        p_glint *= self.scale_factor  # keep as np.float32
 
         # ------------------------------ #
         nBands = len(vis_band_ids)
@@ -898,11 +903,10 @@ class GlintCorr:
             # ------------------------------ #
             # copy band
             deglint_band = np.array(vis_im, order="K", copy=True)
-
-            waterIx = np.where((fmask == waterVal) & (vis_im != nodata))
+            waterMSK = ((fmask == waterVal) & (vis_im != nodata))
 
             # 1. deglint water pixels
-            deglint_band[waterIx] = vis_im[waterIx] - p_glint[waterIx]
+            deglint_band[waterMSK] = vis_im[waterMSK] - p_glint[waterMSK]
 
             # 2. write geotiff
             deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
