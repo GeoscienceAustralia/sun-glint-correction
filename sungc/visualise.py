@@ -21,6 +21,8 @@ def display_image(img, out_png):
         )
         print("    Saved '{0}'".format(out_png))
 
+    return ax
+
 
 def display_scaled_image(img, lower_val, upper_val, out_png):
 
