@@ -4,8 +4,11 @@ import os
 import sys
 import rasterio
 import numpy as np
+import numexpr as nexpr
 import matplotlib.pyplot as plt
 from os.path import join as pjoin
+
+from sungc.tiler import generate_tiles
 
 def calc_pfresnel(w, n_sw=1.34):
     """
@@ -24,13 +27,9 @@ def calc_pfresnel(w, n_sw=1.34):
     p_fresnel : numpy.ndarray (np.float32/64)
         The fresnel reflectance
     """
-    w_prime = np.arcsin(np.sin(w) / n_sw)
-    w_plus_wp = w + w_prime
-    w_minus_wp = w - w_prime
-
-    p_fres = 0.5 * (
-        (np.sin(w_minus_wp) / np.sin(w_plus_wp)) ** 2
-        + (np.tan(w_minus_wp) / np.tan(w_plus_wp)) ** 2
+    w_pr = nexpr.evaluate("arcsin(sin(w)/n_sw)")
+    p_fres = nexpr.evaluate(
+        "0.5*((sin(w-w_pr)/sin(w+w_pr))**2 + (tan(w-w_pr)/tan(w+w_pr))**2)"
     )
 
     return p_fres
@@ -114,6 +113,7 @@ def cm_sunglint(
         )
 
     # Define parameters needed for the wind-direction-independent model
+    pi_ = np.pi
     n_sw = 1.34  # refractive index of seawater
     deg2rad = np.pi / 180.0
     sigma2 = 0.003 + 0.00512 * wind_speed
@@ -122,55 +122,51 @@ def cm_sunglint(
     # the same dimensions as the inputs (view_zenith, solar_zenith,
     # relative_azimuth). If the dimensions of these inputs are very
     # large, then a memory issue may arise. A better way would be to
-    # iterate through k segments of these input arrays. This will
+    # iterate through tiles/blocks of these input arrays. This will
     # cause a slightly longer processing time
-    num_segments = 30
-    nRows_PerSeg = nRows // num_segments
-    for i in range(0, num_segments):
-        start_rowIx = i * nRows_PerSeg
+    tiles = generate_tiles(samples=nCols, lines=nRows, xtile=256, ytile=256)
+    for t_ix in tiles:
 
-        if i < num_segments - 1:
-            end_rowIx = start_rowIx + nRows_PerSeg - 1
-        else:
-            end_rowIx = nRows - 1
-
-        phi_raz = np.copy(relative_azimuth[start_rowIx : end_rowIx + 1, :])
+        phi_raz = np.copy(relative_azimuth[t_ix])
         phi_raz[phi_raz > 180.0] -= 360.0
         phi_raz *= deg2rad
 
-        theta_szn = solar_zenith[start_rowIx : end_rowIx + 1, :] * deg2rad
-        theta_vzn = view_zenith[start_rowIx : end_rowIx + 1, :] * deg2rad
+        theta_szn = solar_zenith[t_ix] * deg2rad
+        theta_vzn = view_zenith[t_ix] * deg2rad
 
-        cos_theta_szn = np.cos(theta_szn)
-        cos_theta_vzn = np.cos(theta_vzn)
+        cos_theta_szn = nexpr.evaluate("cos(theta_szn)")
+        cos_theta_vzn = nexpr.evaluate("cos(theta_vzn)")
 
         # compute cos(w)
         # w = angle of incidence of a light ray at the water surface
         # use numexpr instead
-        cos_2w = cos_theta_szn * cos_theta_vzn + np.sin(theta_szn) * np.sin(
-            theta_vzn
-        ) * np.sin(phi_raz)
+        cos_2w = nexpr.evaluate(
+            "cos_theta_szn*cos_theta_vzn "
+            "+ sin(theta_szn)*sin(theta_vzn)*sin(phi_raz)"
+        )
 
         # use trig. identity, cos(x/2) = +/- sqrt{ [1 + cos(x)] / 2 }
         # hence,
         # cos(2w/2) = cos(w) = +/- sqrt{ [1 + cos(2w)] / 2 }
-        cos_w = ((1.0 + cos_2w) / 2.0) ** 0.5
+        cos_w = nexpr.evaluate("((1.0 + cos_2w) / 2.0) ** 0.5")
 
         # compute cos(B), where B = beta;  numpy.ndarray
-        cos_B = (cos_theta_szn + cos_theta_vzn) / (2.0 * cos_w)
+        cos_B = nexpr.evaluate(
+            "(cos_theta_szn + cos_theta_vzn) / (2.0 * cos_w)"
+        )
 
         # compute tan(B)^2 = sec(B)^2 -1;  numpy.ndarray
-        tanB_2 = (1.0 / (cos_B ** 2.0)) - 1.0
+        tanB_2 = nexpr.evaluate("(1.0 / (cos_B ** 2.0)) - 1.0")
 
         # compute surface slope distribution:
-        dist_SurfSlope = (
-            1.0 / (np.pi * sigma2) * np.exp(-1.0 * tanB_2 / sigma2)
+        dist_SurfSlope = nexpr.evaluate(
+            "1.0 / (pi_ * sigma2) * exp(-1.0 * tanB_2 / sigma2)"
         )
 
         # calculcate the Fresnel reflectance, numpy.ndarray
-        p_fr = calc_pfresnel(w=np.arccos(cos_w), n_sw=n_sw)
+        p_fr = calc_pfresnel(w=nexpr.evaluate("arccos(cos_w)"), n_sw=n_sw)
         if return_fresnel:
-            p_fresnel[start_rowIx : end_rowIx + 1, :] = p_fr
+            p_fresnel[t_ix] = p_fr
 
         # according to Kay et al. (2009):
         # "n_sw varies with wavelength from 1.34 to 1.35 for sea-water
@@ -179,11 +175,9 @@ def cm_sunglint(
         #  much greater than that with wavelength"
 
         # calculate the glint reflectance image, numpy.ndarray
-        p_glint[start_rowIx : end_rowIx + 1, :] = (
-            np.pi
-            * p_fr
-            * dist_SurfSlope
-            / (4.0 * cos_theta_szn * cos_theta_vzn * (cos_B ** 4))
+        p_glint[t_ix] = nexpr.evaluate(
+            "pi_ * p_fr * dist_SurfSlope "
+            "/ (4.0 * cos_theta_szn * cos_theta_vzn * (cos_B ** 4))"
         )
 
     return p_glint, p_fresnel
