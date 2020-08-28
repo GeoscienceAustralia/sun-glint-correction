@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from os.path import join as pjoin
 
 from sungc.tiler import generate_tiles
+from sungc.rasterio_funcs import load_singleBand
 
 def calc_pfresnel(w, n_sw=1.34):
     """
@@ -36,9 +37,9 @@ def calc_pfresnel(w, n_sw=1.34):
 
 
 def cm_sunglint(
-    view_zenith,
-    solar_zenith,
-    relative_azimuth,
+    view_zenith_file,
+    solar_zenith_file,
+    relative_azimuth_file,
     wind_speed,
     return_fresnel=False,
 ):
@@ -49,14 +50,17 @@ def cm_sunglint(
 
     Parameters
     ----------
-    view_zenith : numpy.ndarray (np.float32/64)
-        Sensor view-zenith angle (degrees)
+    view_zenith_file : str
+        filename of sensor view-zenith angle image 
+        (units of image data: degrees)
 
-    solar_zenith : numpy.ndarray (np.float32/64)
-        Solar zenith angle (degrees)
+    solar_zenith_file : str
+        filename of solar zenith angle image
+        (units of image data: degrees)
 
-    relative_azimuth : numpy.ndarray (np.float32/64)
-        Relative azimuth angle between sensor and sun (degrees)
+    relative_azimuth_file : str
+        filename of relative azimuth angle between sensor and sun
+        image (units of image data: degrees)
 
     wind_speed : float
         Wind speed (m/s)
@@ -75,6 +79,10 @@ def cm_sunglint(
         if return_fresnel=False then p_fresnel=None
         if return_fresnel=True  then p_fresnel=numpy.ndarray
 
+    cm_glint_meta : dict
+        A dictionary containing (modified) rasterio metadata.
+        Useful if you want to save the outputs as geotiffs
+
     Raises
     ------
     Exception:
@@ -82,6 +90,12 @@ def cm_sunglint(
         * if dimension mismatch
         * if wind_speed < 0
     """
+
+    view_zenith, vzen_meta = load_singleBand(view_zenith_file)
+    solar_zenith, szen_meta = load_singleBand(solar_zenith_file)
+    relative_azimuth, razi_meta = load_singleBand(relative_azimuth_file)
+
+    cm_glint_meta = vzen_meta.copy()
 
     if (
         (view_zenith.ndim != 2)
@@ -180,4 +194,4 @@ def cm_sunglint(
             "/ (4.0 * cos_theta_szn * cos_theta_vzn * (cos_B ** 4))"
         )
 
-    return p_glint, p_fresnel
+    return p_glint, p_fresnel, cm_glint_meta
