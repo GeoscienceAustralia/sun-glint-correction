@@ -37,14 +37,14 @@ class GlintCorr:
         Examples
         --------
         """
-        self.product = product
-        prop_dict = dc_dataset.metadata_doc["properties"]
-        meas_dict = dc_dataset.metadata_doc["measurements"]
         base_dir = dc_dataset.local_path.parent
 
-        self.sensor = prop_dict["eo:platform"].lower()
+        self.product = product
         self.group_path = dc_dataset.local_path.parent
-        self.overpass_datetime = prop_dict["datetime"]  # str
+
+        self.meas_dict = self.get_meas_dict(dc_dataset)
+        self.sensor = self.get_sensor(dc_dataset)
+        self.overpass_datetime = self.get_overpass_datetime(dc_dataset)
 
         # check paths
         self.check_path_exists(self.group_path)
@@ -55,8 +55,8 @@ class GlintCorr:
         # define the scale factor to convert to reflectance
         self.scale_factor = 10000.0
 
-        # get list of tif files
-        self.bandList, self.band_ids, self.bandNames = self.get_band_list(meas_dict)
+        # get list of tif files from self.meas_dict
+        self.bandList, self.band_ids, self.bandNames = self.get_band_list()
 
         # get a useful output basename
         # that a user may want to use
@@ -68,7 +68,8 @@ class GlintCorr:
         if fmask_file:
             self.fmask_file = pathlib.PosixPath(fmask_file)
         else:
-            self.fmask_file = self.group_path.joinpath(meas_dict["oa_fmask"]["path"])
+            # get fmask from self.meas_dict
+            self.fmask_file = self.get_fmask_file()
 
         self.check_path_exists(self.fmask_file)
 
@@ -85,15 +86,15 @@ class GlintCorr:
 
     def check_sensor(self):
         if (
-            (not self.sensor == "sentinel-2a")
-            and (not self.sensor == "sentinel-2b")
+            (not self.sensor == "sentinel_2a")
+            and (not self.sensor == "sentinel_2b")
             and (not self.sensor == "landsat-5")
             and (not self.sensor == "landsat-7")
             and (not self.sensor == "landsat-8")
             and (not self.sensor == "worldview-2")
         ):
             raise Exception(
-                'sensor must be "sentinel-2", "landsat-5",'
+                'sensor must be "sentinel_2", "landsat-5",'
                 '"landsat-7", "landsat-8" or "worldview-2"'
             )
 
@@ -128,41 +129,141 @@ class GlintCorr:
                     )
                 )
 
-    def find_file(self, path, keyword):
+    def find_file(self, keyword):
         """
-        find a file in a directory (path) that
+        find a file in a directory (self.meas_dict)
         has a keyword in its filename
 
         Parameters
         ----------
-        path : str
-            Directory to search
-
         keyword : str
             keyword
 
         Returns
         -------
-        filename : None or str
+        filename : str
             filename
-            if None then file with keyword not found
+
+        Raises
+        ------
+        Exception if filename not found
         """
         filename = None
-        for root, dirs, files in os.walk(path):
-            for f in files:
-                if f.find(keyword) != -1:
-                    filename = pjoin(root, f)
+        for key in self.meas_dict.keys():
+            if key.find(keyword) != -1:
+                basename = self.meas_dict[key]["path"]
+                filename = self.group_path.joinpath(basename)
+
+        if not filename:
+            raise Exception(
+                "\nfilename with keyword ({0}) not found".format(keyword)
+            )
 
         return filename
 
-    def get_band_list(self, meas_dict):
+    def get_meas_dict(self, dc_dataset):
         """
-        Get a list of tifs in self.group_path
+        Get the measurement dictionary from the datacube dataset.
 
         Parameters
         ----------
-        meas_dict : dict()
-            A dictionary containing product band names
+        dc_dataset : datacube.model.Dataset
+            Datacube dataset object
+
+        Returns
+        -------
+        meas_dict : dict
+            A dictionary containing band information
+        """
+        meas_dict = None
+        image_key = None
+        meas_key = None
+        for key in dc_dataset.metadata_doc.keys():
+            if key == "image":
+                image_key = key
+            if key == "measurements":
+                meas_key = key
+
+        if meas_key is None:
+            # older Open Data Cube metadata version used for Sentinel-2
+            meas_dict = dc_dataset.metadata_doc[image_key]["bands"]
+        else:
+            # newer version used for Landsat
+            meas_dict = dc_dataset.metadata_doc[meas_key]
+
+        return meas_dict
+
+    def get_sensor(self, dc_dataset):
+        """
+        Get the sensor from the datacibe dataset
+
+        Parameters
+        ----------
+        dc_dataset : datacube.model.Dataset
+            Datacube dataset object
+
+        Returns
+        -------
+        sensor : str
+            The sensor name
+        """
+        sensor = None
+        prop_key = None
+        platform_key = None
+        for key in dc_dataset.metadata_doc.keys():
+            if key == "platform":
+                platform_key = key  # old version
+            if key == "properties":
+                prop_key = key  # new version
+
+        if prop_key is None:
+            # older version
+            sensor = dc_dataset.metadata_doc[platform_key]["code"].lower()
+        else:
+            # newer version
+            sensor = dc_dataset.metadata_doc[prop_key]["eo:platform"].lower()
+
+        return sensor
+
+    def get_overpass_datetime(self, dc_dataset):
+        """
+        Get the overpass datetime from the datacibe dataset
+
+        Parameters
+        ----------
+        dc_dataset : datacube.model.Dataset
+            Datacube dataset object
+
+        Returns
+        -------
+        overpass_datetime : str
+            YYYY-MM-DD HH:MM:SS.SSSSSSZ
+        """
+        overpass_datetime = None
+        prop_key = None
+        ext_key = None
+        for key in dc_dataset.metadata_doc.keys():
+            if key == "extent":
+                ext_key = key  # old version
+            if key == "properties":
+                prop_key = key  # new version
+
+        if prop_key is None:
+            overpass_datetime = (
+                " ".join(
+                    dc_dataset.metadata_doc[ext_key]["center_dt"].split("T")
+                )
+            )  # older version; YYYY-MM-DD HH:MM:SS.SSSSSSZ
+        else:
+            overpass_datetime = (
+                dc_dataset.metadata_doc[prop_key]["datetime"]
+            )  # newer version; YYYY-MM-DD HH:MM:SS.SSSSSSZ
+
+        return overpass_datetime
+
+    def get_band_list(self):
+        """
+        Get a list of tifs in from self.meas_dict
 
         Returns
         -------
@@ -178,10 +279,15 @@ class GlintCorr:
         bandList = []
         bandNums = []
         bandNames = []
-        for key in meas_dict.keys():
+        for key in self.meas_dict.keys():
             key_spl = key.split("_")
             if key_spl[0].find(self.product) != -1:
-                basename = meas_dict[key]["path"]
+                basename = self.meas_dict[key]["path"]
+                if basename.lower().find("contiguity") != -1:
+                    # skip over files such as:
+                    # S2A_OPER_MSI_ARD_TL_EPAE_{blah}.07_NBART_CONTIGUITY.TIF
+                    continue
+
                 bnum = os.path.splitext(basename)[0][-2:].strip("0")
 
                 bandNames.append("_".join(key_spl[1:]))
@@ -192,7 +298,33 @@ class GlintCorr:
             raise Exception(
                 "Could not find any geotifs in '{0}'".format(self.group_path)
             )
+
         return bandList, bandNums, bandNames
+
+    def get_fmask_file(self):
+        """
+        Get the fmask file from self.meas_dict
+
+        Returns
+        -------
+        fmask_file : str
+            fmask filename
+
+        Raises
+        ------
+        Exception if fmask file is not found
+        """
+        fmask_file = None
+        for key in self.meas_dict.keys():
+            if key.lower().find("fmask") != -1:
+                fmask_file = self.group_path.joinpath(
+                    self.meas_dict[key]["path"]
+                )
+
+        if not fmask_file:
+            raise Exception("\nCould not find the fmask file")
+
+        return fmask_file
 
     def get_fmask(self):
         """
@@ -252,7 +384,7 @@ class GlintCorr:
         if dwnscale_factor < 1:
             raise Exception("\ndwnscale_factor must be a float >= 1")
 
-        if (self.sensor == "sentinel-2a") or (self.sensor == "sentinel-2b") or (self.sensor == "landsat-8"):
+        if (self.sensor == "sentinel_2a") or (self.sensor == "sentinel_2b") or (self.sensor == "landsat-8"):
             ix_red = self.band_ids.index("4")
             ix_grn = self.band_ids.index("3")
             ix_blu = self.band_ids.index("2")
@@ -442,7 +574,7 @@ class GlintCorr:
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
                 # ------------------------------ #
-                fmask = rio_funcs.resample_band_to_ds(
+                fmask = rio_funcs.resample_file_to_ds(
                     self.fmask_file, dsVIS, Resampling.mode
                 )
 
@@ -451,7 +583,7 @@ class GlintCorr:
                 # ------------------------------ #
                 if (nir_nRows != dsVIS.height) or (nir_nCols != dsVIS.width):
                     # resample the NIR band to match the VIS band
-                    nir_im = rio_funcs.resample_band_to_ds(
+                    nir_im = rio_funcs.resample_file_to_ds(
                         nir_bandPath, dsVIS, Resampling.bilinear
                     )
 
@@ -619,14 +751,14 @@ class GlintCorr:
                 # ------------------------------ #
                 if (nir_nRows != dsVIS.height) or (nir_nCols != dsVIS.width):
                     # resample the NIR band to match the VIS band
-                    nir_im = rio_funcs.resample_band_to_ds(
+                    nir_im = rio_funcs.resample_file_to_ds(
                         nir_bandPath, dsVIS, Resampling.bilinear
                     )
 
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
                 # ------------------------------ #
-                fmask = rio_funcs.resample_band_to_ds(
+                fmask = rio_funcs.resample_file_to_ds(
                     self.fmask_file, dsVIS, Resampling.mode
                 )
 
@@ -826,19 +958,22 @@ class GlintCorr:
         if vzen_file:
             self.check_path_exists(vzen_file)
         else:
-            vzen_file = self.find_file(self.group_path, "satellite-view.tif")
+            # find view zenith from self.meas_dict
+            vzen_file = self.find_file("satellite_view")
 
         # --- check szen_file --- #
         if szen_file:
             self.check_path_exists(szen_file)
         else:
-            szen_file = self.find_file(self.group_path, "solar-zenith.tif")
+            # find solar zenith from self.meas_dict
+            szen_file = self.find_file("solar_zenith")
 
         # --- check razi_file --- #
         if razi_file:
             self.check_path_exists(razi_file)
         else:
-            razi_file = self.find_file(self.group_path, "relative-azimuth.tif")
+            # find relative azimuth from self.meas_dict
+            razi_file = self.find_file("relative_azimuth")
 
         # Check that the input vis bands exist
         self.check_bandNum_exist(self.band_ids, vis_band_ids)
@@ -847,19 +982,16 @@ class GlintCorr:
         #  Estimate sunglint reflectance  #
         # ------------------------------- #
 
-        # load vzen, szen and razi
-        vzen_im, vzen_meta = rio_funcs.load_singleBand(vzen_file)
-        szen_im, szen_meta = rio_funcs.load_singleBand(szen_file)
-        razi_im, razi_meta = rio_funcs.load_singleBand(razi_file)
-
         # cox and munk:
-        p_glint, p_fresnel = cm_sunglint(
-            view_zenith=vzen_im,
-            solar_zenith=szen_im,
-            relative_azimuth=razi_im,
+        p_glint, p_fresnel, cm_meta = cm_sunglint(
+            view_zenith_file=vzen_file,
+            solar_zenith_file=szen_file,
+            relative_azimuth_file=razi_file,
             wind_speed=wind_speed,
             return_fresnel=False,
         )
+
+        psg_nRows, psg_nCols = p_glint.shape
         # Notes:
         #    * if return_fresnel=True  then p_fresnel = numpy.ndarray
         #    * if return_fresnel=False then p_fresnel = None
@@ -885,6 +1017,7 @@ class GlintCorr:
             # ------------------------------ #
             with rasterio.open(vis_bandPath, "r") as dsVIS:
                 vis_im = dsVIS.read(1)
+                vis_nRows, vis_nCols = vis_im.shape
 
                 # get metadata
                 kwargs = dsVIS.meta.copy()
@@ -894,9 +1027,20 @@ class GlintCorr:
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
                 # ------------------------------ #
-                fmask = rio_funcs.resample_band_to_ds(
+                fmask = rio_funcs.resample_file_to_ds(
                     self.fmask_file, dsVIS, Resampling.mode
                 )
+
+                # ------------------------------ #
+                #        Resample p_glint        #
+                # ------------------------------ #
+                if (vis_nRows != psg_nRows) or (psg_nCols != vis_nCols):
+                    p_glint_res = rio_funcs.resample_band_to_ds(
+                        p_glint, cm_meta, dsVIS, Resampling.bilinear
+                    )
+
+                else:
+                    p_glint_res = np.copy(p_glint)
 
             # ------------------------------ #
             #       Sunglint Correction      #
@@ -906,7 +1050,7 @@ class GlintCorr:
             waterMSK = ((fmask == waterVal) & (vis_im != nodata))
 
             # 1. deglint water pixels
-            deglint_band[waterMSK] = vis_im[waterMSK] - p_glint[waterMSK]
+            deglint_band[waterMSK] = vis_im[waterMSK] - p_glint_res[waterMSK]
 
             # 2. write geotiff
             deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
