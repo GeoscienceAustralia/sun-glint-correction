@@ -290,9 +290,9 @@ def resample_bands(
     #     resampling was not successful for any listed bands
     return resmpl_ofiles, spectral_cube, metad
 
-def resample_band_to_ds(image_file, ref_ds, resample_option):
+def resample_file_to_ds(image_file, ref_ds, resample_option):
     """
-    Resample fmask to a reference band given
+    Resample a file to a reference band given
     by the rasterio dataset (ref_ds)
 
     Parameters
@@ -334,6 +334,52 @@ def resample_band_to_ds(image_file, ref_ds, resample_option):
             resampling=resample_option,
         )
     return image
+
+def resample_band_to_ds(img, img_meta, ref_ds, resample_option):
+    """
+    Resample a numpy.ndarray to a reference band given
+    by the rasterio dataset (ref_ds)
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        loaded image to resample
+
+    img_meta : dict
+        A dictionary containing (modified) rasterio metadata
+
+    ref_ds : dataset
+        A rasterio dataset of the reference band
+        that fmask will be resampled
+
+    resample_option : <enum 'Resampling'> class
+        The Resampling.<> algorithm, e.g.
+        Resampling.nearest
+        Resampling.bilinear
+        Resampling.cubic
+        Resampling.cubic_spline
+        e.t.c
+
+    Returns
+    -------
+    resampled_img : numpy.ndarray
+        2-Dimensional numpy array
+    """
+    resampled_img = np.zeros(
+        [ref_ds.height, ref_ds.width], order="C", dtype=img.dtype
+    )
+
+    reproject(
+        source=img,
+        destination=resampled_img,
+        src_transform=img_meta["transform"],
+        src_crs=img_meta["crs"],
+        dst_transform=ref_ds.transform,
+        dst_crs=ref_ds.crs,
+        resampling=resample_option,
+    )
+    return resampled_img
+
 
 def load_mask_from_shp(shp_file, ref_ds):
     """
