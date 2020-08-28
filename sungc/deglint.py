@@ -8,7 +8,9 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
+from pprint import pprint
 from scipy import stats
+from datetime import datetime
 from os.path import join as pjoin
 from rasterio.warp import Resampling
 
@@ -17,8 +19,14 @@ from sungc.interactive import ROI_Selector
 from sungc.cox_munk_funcs import cm_sunglint
 from sungc.visualise import enhanced_RGB_stretch, display_image
 
-get_bandNums_int = lambda f: int(os.path.splitext(f)[0].split("-")[1])
-get_bandNums_str = lambda f: os.path.splitext(f)[0].split("-")[1]
+SUPPORTED_SENSORS = [
+    "sentinel_2a",
+    "sentinel_2b",
+    "landsat-5",
+    "landsat-7",
+    "landsat-8",
+    "worldview-2"
+]
 
 
 class GlintCorr:
@@ -85,18 +93,9 @@ class GlintCorr:
         )
 
     def check_sensor(self):
-        if (
-            (not self.sensor == "sentinel_2a")
-            and (not self.sensor == "sentinel_2b")
-            and (not self.sensor == "landsat-5")
-            and (not self.sensor == "landsat-7")
-            and (not self.sensor == "landsat-8")
-            and (not self.sensor == "worldview-2")
-        ):
-            raise Exception(
-                'sensor must be "sentinel_2", "landsat-5",'
-                '"landsat-7", "landsat-8" or "worldview-2"'
-            )
+        if self.sensor not in SUPPORTED_SENSORS:
+            msg = f"Supported sensors are: {SUPPORTED_SENSORS}, recieved {sensor}"
+            raise Exception(msg)
 
     def check_path_exists(self, path):
         """ Checks if a path exists """
@@ -175,21 +174,14 @@ class GlintCorr:
         meas_dict : dict
             A dictionary containing band information
         """
-        meas_dict = None
-        image_key = None
-        meas_key = None
-        for key in dc_dataset.metadata_doc.keys():
-            if key == "image":
-                image_key = key
-            if key == "measurements":
-                meas_key = key
-
-        if meas_key is None:
-            # older Open Data Cube metadata version used for Sentinel-2
-            meas_dict = dc_dataset.metadata_doc[image_key]["bands"]
+        if "image" in dc_dataset.metadata_doc:
+            # older version
+            meas_dict = dc_dataset.metadata_doc["image"]["bands"]
+        elif "measurements" in dc_dataset.metadata_doc:
+            # newer version
+            meas_dict = dc_dataset.metadata_doc["measurements"]
         else:
-            # newer version used for Landsat
-            meas_dict = dc_dataset.metadata_doc[meas_key]
+            raise Exception("neither image nor measurements keys were found in metadata_doc")
 
         return meas_dict
 
@@ -207,21 +199,14 @@ class GlintCorr:
         sensor : str
             The sensor name
         """
-        sensor = None
-        prop_key = None
-        platform_key = None
-        for key in dc_dataset.metadata_doc.keys():
-            if key == "platform":
-                platform_key = key  # old version
-            if key == "properties":
-                prop_key = key  # new version
-
-        if prop_key is None:
+        if "platform" in dc_dataset.metadata_doc:
             # older version
-            sensor = dc_dataset.metadata_doc[platform_key]["code"].lower()
-        else:
+            sensor = dc_dataset.metadata_doc["platform"]["code"].lower()
+        elif "properties" in dc_dataset.metadata_doc:
             # newer version
-            sensor = dc_dataset.metadata_doc[prop_key]["eo:platform"].lower()
+            sensor = dc_dataset.metadata_doc["properties"]["eo:platform"].lower()
+        else:
+            raise Exception("neither platform nor properties keys were found in metadata_doc")
 
         return sensor
 
@@ -236,28 +221,27 @@ class GlintCorr:
 
         Returns
         -------
-        overpass_datetime : str
-            YYYY-MM-DD HH:MM:SS.SSSSSSZ
+        overpass_datetime : datetime
+            YYYY-MM-DD HH:MM:SS.SSSSSS
         """
         overpass_datetime = None
-        prop_key = None
-        ext_key = None
-        for key in dc_dataset.metadata_doc.keys():
-            if key == "extent":
-                ext_key = key  # old version
-            if key == "properties":
-                prop_key = key  # new version
-
-        if prop_key is None:
-            overpass_datetime = (
-                " ".join(
-                    dc_dataset.metadata_doc[ext_key]["center_dt"].split("T")
+        if "extent" in dc_dataset.metadata_doc:
+            # new and old metadata have "extent" key
+            if "center_dt" in dc_dataset.metadata_doc["extent"]:
+                # older version
+                overpass_datetime = datetime.strptime(
+                    dc_dataset.metadata_doc["extent"]["center_dt"],
+                    "%Y-%m-%dT%H:%M:%S.%fZ"
                 )
-            )  # older version; YYYY-MM-DD HH:MM:SS.SSSSSSZ
-        else:
-            overpass_datetime = (
-                dc_dataset.metadata_doc[prop_key]["datetime"]
-            )  # newer version; YYYY-MM-DD HH:MM:SS.SSSSSSZ
+                
+        if "properties" in dc_dataset.metadata_doc:
+            # newer version
+            overpass_datetime = datetime.strptime(
+                dc_dataset.metadata_doc["properties"]["datetime"], "%Y-%m-%d %H:%M:%S.%fZ"
+            )
+
+        if not overpass_datetime:
+            raise Exception("neither extent nor properties keys were found in metadata_doc")
 
         return overpass_datetime
 
@@ -314,36 +298,12 @@ class GlintCorr:
         ------
         Exception if fmask file is not found
         """
-        fmask_file = None
-        for key in self.meas_dict.keys():
-            if key.lower().find("fmask") != -1:
-                fmask_file = self.group_path.joinpath(
-                    self.meas_dict[key]["path"]
-                )
-
-        if not fmask_file:
+        if "fmask" in self.meas_dict:
+            fmask_file = self.group_path.joinpath(self.meas_dict["fmask"]["path"])
+        elif "oa_fmask" in self.meas_dict:
+            fmask_file = self.group_path.joinpath(self.meas_dict["oa_fmask"]["path"])
+        else:
             raise Exception("\nCould not find the fmask file")
-
-        return fmask_file
-
-    def get_fmask(self):
-        """
-        Find the fmask.img file in the specified directory
-        """
-        fmask_file = None
-        for root, dirs, files in os.walk(self.group_path):
-            for f in files:
-                f_indir = pjoin(self.group_path, f)
-                if os.path.isfile(f_indir) and f.lower().endswith(
-                    ".fmask.img"
-                ):
-                    fmask_file = f_indir
-                    break
-
-        if not fmask_file:
-            raise Exception(
-                "\nfmask not found in '{0}'".format(self.group_path)
-            )
 
         return fmask_file
 
