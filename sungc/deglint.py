@@ -443,7 +443,7 @@ class GlintCorr:
         # close the ROI_Selector
         mc = None
 
-    def gao_2007(
+    def nir_subtraction(
         self,
         vis_band_ids,
         nir_band_id,
@@ -453,7 +453,14 @@ class GlintCorr:
         """
         This sunglint correction assumes that glint reflectance
         is nearly spectrally flat in the VIS-NIR. Hence, the NIR
-        reflectance is subtracted from the VIS bands
+        reflectance is subtracted from the VIS bands.
+
+        Dierssen, H.M., Chlus, A., Russell, B. 2015. Hyperspectral
+        discrimination of floating mats of seagrass wrack and the
+        macroalgae Sargassum in coastal waters of Greater Florida
+        Bay using airborne remote sensing. Remote Sens. Environ.,
+        167(15), 247-258, doi: https://doi.org/10.1016/j.rse.2015.01.027
+
 
         Parameters
         ----------
