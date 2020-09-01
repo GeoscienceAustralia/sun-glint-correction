@@ -29,8 +29,8 @@ Log into NCI and clone this repository into a dir/workspace in you NCI home dir:
 ```BASH
 cd ~/<your project dir>
 git clone git@github.com:GeoscienceAustralia/sun-glint-correction.git
-cd gamma_insar
-git checkout -b pygamma_workflow
+cd sun-glint-correction
+git checkout -b develop
 
 # set up a local Python 3.6 runtime environment
 source configs/sunglint.env  # should be error/warning free
