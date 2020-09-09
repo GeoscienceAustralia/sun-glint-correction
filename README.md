@@ -23,7 +23,7 @@ Hedley, J. D., Harborne, A. R., Mumby, P. J. (2005). Simple and
     Int. J. Remote Sens., 26(10), 2107-2112.
 
 ## Installation
-
+### NCI
 Log into NCI and clone this repository into a dir/workspace in you NCI home dir:
 
 ```BASH
@@ -38,6 +38,10 @@ export CUSTOM_PY_INSTALL=~/.digitalearthau/dea-env/20200713/local
 mkdir -p $CUSTOM_PY_INSTALL/lib/python3.6/site-packages/
 python setup.py install --prefix=$CUSTOM_PY_INSTALL
 ```
+### Laptop/Desktop
+
+python setup.py install --prefix=<install-dir>
+Here, --prefix is optional.
 
 ## Operating System tested
 
@@ -150,4 +154,7 @@ def main():
     )
     # the deglinted bands are saved as geotifs in mnir_dir,
     # see mnir_bandList
+
+if __name__ == "__main__":
+    main()
 ```
