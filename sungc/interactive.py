@@ -60,7 +60,8 @@ class ROI_Selector(object):
 
         self.ax.set_clip_on(False)
         self.ax.set_title(
-            "Click and drag a point to move it; "
+            "Select homogeneous water region with varying sunglint."
+            "\nClick and drag a point to move it; "
             "'i' to insert; 'd' to delete.\n"
             "Close figure when done."
         )

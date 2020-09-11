@@ -1,26 +1,33 @@
 Python module for applying sun glint corrections to optical reflectance image data.
 The following three commonly used sunglint correction algorithms are supported:
-1) Cox and Munk (1954) statistical/geometry approach;
-2) Hedley et al. (2005) correlation approach, and;
-3) NIR subtraction approach (e.g. Dierssen et al., 2015)
+1. Cox and Munk (1954) statistical/geometry approach;
+2. Hedley et al. (2005) correlation approach, and;
+3. NIR/SWIR subtraction approach (e.g. Dierssen et al., 2015)
 
-References:
-Cox, C., Munk, W. 1954. Statistics of the Sea Surface Derived
-    from Sun Glitter. J. Mar. Res., 13, 198-227.
+Notes
+- Cox and Munk approach requires an input wind speed (not yet automated)
+- The Hedley approach requires a user-selected region of interest.
+This module creates an interactive matplotlib figure that a user can
+manipulate (add/delete vertices) to create the desiged polygon over
+the region of interest.
 
-Cox, C., Munk, W. 1954. Measurement of the Roughness of the Sea
-    Surface from Photographs of the Suns Glitter. J. Opt. Soc. Am.,
-    44, 838-850.
+References
+- Cox, C., Munk, W. 1954. Statistics of the Sea Surface Derived
+from Sun Glitter. J. Mar. Res., 13, 198-227.
 
-Dierssen, H.M., Chlus, A., Russell, B. 2015. Hyperspectral
-    discrimination of floating mats of seagrass wrack and the
-    macroalgae Sargassum in coastal waters of Greater Florida
-    Bay using airborne remote sensing. Remote Sens. Environ.,
-    167(15), 247-258, doi: https://doi.org/10.1016/j.rse.2015.01.027
+- Cox, C., Munk, W. 1954. Measurement of the Roughness of the Sea
+Surface from Photographs of the Suns Glitter. J. Opt. Soc. Am.,
+44, 838-850.
 
-Hedley, J. D., Harborne, A. R., Mumby, P. J. (2005). Simple and
-    robust removal of sun glint for mapping shallow-water benthos.
-    Int. J. Remote Sens., 26(10), 2107-2112.
+- Dierssen, H.M., Chlus, A., Russell, B. 2015. Hyperspectral
+discrimination of floating mats of seagrass wrack and the
+macroalgae Sargassum in coastal waters of Greater Florida
+Bay using airborne remote sensing. Remote Sens. Environ.,
+167(15), 247-258, doi: https://doi.org/10.1016/j.rse.2015.01.027
+
+- Hedley, J. D., Harborne, A. R., Mumby, P. J. (2005). Simple and
+robust removal of sun glint for mapping shallow-water benthos.
+Int. J. Remote Sens., 26(10), 2107-2112.
 
 ## Installation
 ### NCI
@@ -40,8 +47,8 @@ python setup.py install --prefix=$CUSTOM_PY_INSTALL
 ```
 ### Laptop/Desktop
 
-python setup.py install --prefix=<install-dir>
-Here, --prefix is optional.
+```python setup.py install --prefix=<install-dir>```
+Here, `--prefix` is optional.
 
 ## Operating System tested
 

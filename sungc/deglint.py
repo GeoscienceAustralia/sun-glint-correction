@@ -17,7 +17,7 @@ from rasterio.warp import Resampling
 import sungc.rasterio_funcs as rio_funcs
 from sungc.interactive import ROI_Selector
 from sungc.cox_munk_funcs import cm_sunglint
-from sungc.visualise import enhanced_RGB_stretch, display_image
+from sungc.visualise import seadas_style_RGB, plot_correlations, display_image
 
 SUPPORTED_SENSORS = [
     "sentinel_2a",
@@ -25,7 +25,7 @@ SUPPORTED_SENSORS = [
     "landsat-5",
     "landsat-7",
     "landsat-8",
-    "worldview-2"
+    "worldview-2",
 ]
 
 
@@ -181,7 +181,9 @@ class GlintCorr:
             # newer version
             meas_dict = dc_dataset.metadata_doc["measurements"]
         else:
-            raise Exception("neither image nor measurements keys were found in metadata_doc")
+            raise Exception(
+                "neither image nor measurements keys were found in metadata_doc"
+            )
 
         return meas_dict
 
@@ -204,9 +206,13 @@ class GlintCorr:
             sensor = dc_dataset.metadata_doc["platform"]["code"].lower()
         elif "properties" in dc_dataset.metadata_doc:
             # newer version
-            sensor = dc_dataset.metadata_doc["properties"]["eo:platform"].lower()
+            sensor = dc_dataset.metadata_doc["properties"][
+                "eo:platform"
+            ].lower()
         else:
-            raise Exception("neither platform nor properties keys were found in metadata_doc")
+            raise Exception(
+                "neither platform nor properties keys were found in metadata_doc"
+            )
 
         return sensor
 
@@ -231,17 +237,20 @@ class GlintCorr:
                 # older version
                 overpass_datetime = datetime.strptime(
                     dc_dataset.metadata_doc["extent"]["center_dt"],
-                    "%Y-%m-%dT%H:%M:%S.%fZ"
+                    "%Y-%m-%dT%H:%M:%S.%fZ",
                 )
-                
+
         if "properties" in dc_dataset.metadata_doc:
             # newer version
             overpass_datetime = datetime.strptime(
-                dc_dataset.metadata_doc["properties"]["datetime"], "%Y-%m-%d %H:%M:%S.%fZ"
+                dc_dataset.metadata_doc["properties"]["datetime"],
+                "%Y-%m-%d %H:%M:%S.%fZ",
             )
 
         if not overpass_datetime:
-            raise Exception("neither extent nor properties keys were found in metadata_doc")
+            raise Exception(
+                "neither extent nor properties keys were found in metadata_doc"
+            )
 
         return overpass_datetime
 
@@ -299,9 +308,13 @@ class GlintCorr:
         Exception if fmask file is not found
         """
         if "fmask" in self.meas_dict:
-            fmask_file = self.group_path.joinpath(self.meas_dict["fmask"]["path"])
+            fmask_file = self.group_path.joinpath(
+                self.meas_dict["fmask"]["path"]
+            )
         elif "oa_fmask" in self.meas_dict:
-            fmask_file = self.group_path.joinpath(self.meas_dict["oa_fmask"]["path"])
+            fmask_file = self.group_path.joinpath(
+                self.meas_dict["oa_fmask"]["path"]
+            )
         else:
             raise Exception("\nCould not find the fmask file")
 
@@ -344,7 +357,11 @@ class GlintCorr:
         if dwnscale_factor < 1:
             raise Exception("\ndwnscale_factor must be a float >= 1")
 
-        if (self.sensor == "sentinel_2a") or (self.sensor == "sentinel_2b") or (self.sensor == "landsat-8"):
+        if (
+            (self.sensor == "sentinel_2a")
+            or (self.sensor == "sentinel_2b")
+            or (self.sensor == "landsat-8")
+        ):
             ix_red = self.band_ids.index("4")
             ix_grn = self.band_ids.index("3")
             ix_blu = self.band_ids.index("2")
@@ -382,19 +399,10 @@ class GlintCorr:
                 rgb_bandList, self.scale_factor, False
             )
 
-        # resample fmask
-        resmpl_tifs, fmask_im, fmask_meta = rio_funcs.resample_bands(
-            [self.fmask_file],
-            ql_spatialRes,
-            Resampling.mode,
-            load=True,
-            save=False,
-            odir=None,
-        )
-
-        # create a pretty RGB
-        rgb_im = enhanced_RGB_stretch(
-            refl_im, fmask_im, [0, 1, 2], rio_meta["nodata"], 0.1, 99.9
+        # use NASA-OBPG SeaDAS's transformation to create
+        # a very pretty RGB
+        rgb_im = seadas_style_RGB(
+            refl_img=refl_im, rgb_ix=[0, 1, 2], scale_factor=self.scale_factor
         )
 
         return rgb_im, rio_meta
@@ -444,11 +452,7 @@ class GlintCorr:
         mc = None
 
     def nir_subtraction(
-        self,
-        vis_band_ids,
-        nir_band_id,
-        odir=None,
-        waterVal=5,
+        self, vis_band_ids, nir_band_id, odir=None, waterVal=5,
     ):
         """
         This sunglint correction assumes that glint reflectance
@@ -546,27 +550,45 @@ class GlintCorr:
                 )
 
                 # ------------------------------ #
-                #       Resample NIR band        #
+                #        Resample NIR band       #
+                #               and              #
+                #       Sunglint Correction      #
                 # ------------------------------ #
+                deglint_band = np.array(vis_im, order="K", copy=True)
+
                 if (nir_nRows != dsVIS.height) or (nir_nCols != dsVIS.width):
                     # resample the NIR band to match the VIS band
-                    nir_im = rio_funcs.resample_file_to_ds(
+                    nir_im_res = rio_funcs.resample_file_to_ds(
                         nir_bandPath, dsVIS, Resampling.bilinear
                     )
 
-            # ------------------------------ #
-            #       Sunglint Correction      #
-            # ------------------------------ #
-            # copy band
-            deglint_band = np.array(vis_im, order="K", copy=True)
+                    waterIx = np.where(
+                        (fmask == waterVal)
+                        & (vis_im != nodata)
+                        & (nir_im_res != nodata)
+                    )
 
-            waterIx = np.where(
-                (fmask == waterVal) & (vis_im != nodata) & (nir_im != nodata)
-            )
+                    # 1. deglint water pixels
+                    deglint_band[waterIx] = (
+                        vis_im[waterIx] - nir_im_res[waterIx]
+                    )
 
-            # 1. deglint water pixels
-            deglint_band[waterIx] = vis_im[waterIx] - nir_im[waterIx]
-            deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
+                    # Apply mask:
+                    deglint_band[
+                        (vis_im == nodata) | (nir_im_res == nodata)
+                    ] = nodata
+
+                else:
+                    waterIx = np.where(
+                        (fmask == waterVal)
+                        & (vis_im != nodata)
+                        & (nir_im != nodata)
+                    )
+
+                    deglint_band[waterIx] = vis_im[waterIx] - nir_im[waterIx]
+                    deglint_band[
+                        (vis_im == nodata) | (nir_im == nodata)
+                    ] = nodata
 
             # 2. write geotiff
             deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
@@ -752,10 +774,9 @@ class GlintCorr:
             minRefl_NIR = valid_NIR.min()
 
             # 2. Get correlations between current band and NIR
-            x_vals = valid_NIR
             y_vals = vis_im[roi_valIx]
             slope, y_inter, r_val, p_val, std_err = stats.linregress(
-                x=x_vals, y=y_vals
+                x=valid_NIR, y=y_vals
             )
 
             # 3. deglint water pixels
@@ -776,67 +797,24 @@ class GlintCorr:
             #        Plot correlations       #
             # ------------------------------ #
             if plot:
-                # clear previous plot
-                ax.clear()
-                ann_str = (
-                    "R-squared = {0:0.2f}\n"
-                    "slope = {1:0.3f}\n"
-                    "y-inter = {2:0.3f}".format(r_val ** 2, slope, y_inter)
+                # create a density plot
+                plot_correlations(
+                    fig=fig,
+                    ax=ax,
+                    r2=r_val ** 2,
+                    slope=slope,
+                    y_inter=y_inter,
+                    nir_vals=valid_NIR,
+                    vis_vals=y_vals,
+                    scale_factor=self.scale_factor,
+                    nir_bandID=nir_band_id,
+                    vis_bandID=vis_band_ids[z],
+                    odir=odir
                 )
-                bnir = "B" + nir_band_id
-                bvis = "B" + vis_band_ids[z]
-                png_file = pjoin(
-                    odir, "Correlation_{0}_vs_{1}.png".format(bnir, bvis),
-                )
-
-                # Randomly select a 50,000 points to avoid plotting
-                # a huge amount of points
-                n_max = 50000
-                mpl.rcParams["agg.path.chunksize"] = n_max
-                rnd_ix = np.arange(0, len(valid_NIR))
-                if len(valid_NIR) > n_max:
-                    np.random.shuffle(rnd_ix)
-
-                (ln1,) = ax.plot(
-                    x_vals[rnd_ix],
-                    y_vals[rnd_ix],
-                    color="k",
-                    linestyle="None",
-                    marker=".",
-                )
-                x_range = np.array([x_vals.min(), x_vals.max()])
-                (ln2,) = ax.plot(
-                    x_range,
-                    slope * (x_range) + y_inter,
-                    color="r",
-                    linestyle="-",
-                )
-                ann1 = ax.annotate(
-                    s=ann_str,
-                    xy=(0.7, 0.2),
-                    xycoords="axes fraction",
-                    fontsize=10,
-                )
-                ax.set_xlabel(bnir)
-                ax.set_ylabel(bvis)
-
-                # save figure
-                fig.savefig(
-                    png_file,
-                    format="png",
-                    bbox_inches="tight",
-                    pad_inches=0.1,
-                    dpi=300,
-                )
-
-                ln1.remove()
-                ln2.remove()
-                ann1.remove()
-            # end-if plot
         # endfor z
 
         return deglint_BandList
-    
+
     def cox_munk(
         self,
         vis_band_ids,
@@ -1014,7 +992,7 @@ class GlintCorr:
             # ------------------------------ #
             # copy band
             deglint_band = np.array(vis_im, order="K", copy=True)
-            waterMSK = ((fmask == waterVal) & (vis_im != nodata))
+            waterMSK = (fmask == waterVal) & (vis_im != nodata)
 
             # 1. deglint water pixels
             deglint_band[waterMSK] = vis_im[waterMSK] - p_glint_res[waterMSK]
