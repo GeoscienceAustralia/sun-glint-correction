@@ -712,7 +712,7 @@ class GlintCorr:
         with rasterio.open(nir_bandPath, "r") as nir_ds:
             nir_nRows = nir_ds.height
             nir_nCols = nir_ds.width
-            nir_im = nir_ds.read(1)
+            nir_im_orig = nir_ds.read(1)
 
         # ------------------------------ #
         nBands = len(vis_band_ids)
@@ -743,6 +743,9 @@ class GlintCorr:
                     nir_im = rio_funcs.resample_file_to_ds(
                         nir_bandPath, dsVIS, Resampling.bilinear
                     )
+
+                else:
+                    nir_im = np.copy(nir_im_orig)
 
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
