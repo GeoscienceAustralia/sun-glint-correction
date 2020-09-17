@@ -4,12 +4,25 @@ The following three commonly used sunglint correction algorithms are supported:
 2. Hedley et al. (2005) correlation approach, and;
 3. NIR/SWIR subtraction approach (e.g. Dierssen et al., 2015)
 
+Please go through the usage examples (below) as they contain handy hints
+
 Notes
+- This module has been tested on image data from Landsat-5, -7 and -8,
+and Sentinel-2A/B. Further testing is required on WV2 data.
 - Cox and Munk approach requires an input wind speed (not yet automated)
 - The Hedley approach requires a user-selected region of interest.
 This module creates an interactive matplotlib figure that a user can
 manipulate (add/delete vertices) to create the desiged polygon over
 the region of interest.
+
+Comments on deglinting S2A/B using Hedley et al. (2005) and NIR subtraction:
+- This module can use band 8 (10 m) to deglint bands 1, 2, 3, 4, 5 and 6,
+that have varying spatial resolutions. In this case band 8 will be downscaled
+to 60 m (for band 1) or 20 m (for bands 5 and 6). Here, rasterio is used for
+the resampling (bilinear interpolation). However, artefacts in the in the
+deglinted bands 5, 6 have been found when band 8 (10 m) is used rather band 7
+or 8A (20 m) as the NIR band. Further work will be required to investigate
+the best practice of downscaling higher resolution bands.
 
 References
 - Cox, C., Munk, W. 1954. Statistics of the Sea Surface Derived
@@ -62,8 +75,9 @@ Linux
 * Worldview-2
 
 ## Usage
-### Deglint Sentinel-2B data
+### Deglint Sentinel-2B MSI data
 Perform the various sunglint corrections on Sentinel-2B data.
+This code works on S2A and S2B.
 First source configs/sunglint.env
 
 ```python
@@ -80,15 +94,144 @@ import datacube
 from sungc import deglint
 
 dc = datacube.Datacube()
-product = "nbart"  # test until water-atcor products become available
+# until wagl-water-atcor products become available,
+# test with nbart products.
+product = "nbart"
 
 dc_name = "s2b_ard_granule"
 
+# Rottnest - Perth, WA
 avail_datasets = dc.find_datasets(
     product=dc_name,
     lon=(115.40, 115.80),
     lat=(-31.60, -32.40),
     time=("2019-01-31", "2019-02-02")
+)
+
+working_dir = "/path/to/somewhere/"
+
+def main():
+
+    # for this test select the first dataset
+    ds = avail_datasets[0]
+
+    g = deglint.GlintCorr(ds, product)
+
+    # Create output directories
+    # sub_folderName = SYYYY_MM_DD
+    overpass_dt = g.overpass_datetime.strftime("%Y-%m-%d %H:%M:%S.%f")
+    sub_folderName = (
+        g.sensor[0].upper()
+        + "_".join(overpass_dt.split()[0].split("-"))
+    )
+
+    mnir_dir = pjoin(working_dir, "MINUS_NIR", dc_name, sub_folderName)
+    hedley_dir = pjoin(working_dir, "HEDLEY", dc_name, sub_folderName)
+    cox_munk_dir = pjoin(working_dir, "COX_MUNK", dc_name, sub_folderName)
+
+    # make output directories
+    os.makedirs(mnir_dir, exist_ok=True)
+    os.makedirs(hedley_dir, exist_ok=True)
+    os.makedirs(cox_munk_dir, exist_ok=True)
+
+    # ---------------------- #
+    #  Cox and Munk (1954)   #
+    # ---------------------- #
+    # deglint Bands 1, 2, 3, 4, 5 and 6 with Cox and Munk (1954).
+    # you need to provide a wind-speed (m/s), here its been
+    # set to 5 m/s
+    cm_bandList = g.cox_munk(
+        vis_band_ids=["1", "2", "3", "4", "5", "6"],
+        odir=cox_munk_dir,
+        wind_speed=5,
+    )
+    # the deglinted bands are saved as geotifs in cox_munk_dir
+    # see cm_bandList
+
+    # ---------------------- #
+    #  Hedley et al. (2019)  #
+    # ---------------------- #
+    # deglint Bands 2, 3 and 4 using Hedley et al. (2005)
+
+    # 1) create shapefile with an interactive matplotlib figure
+    shp_file = pjoin(hedley_dir, g.obase_shp)
+    if not os.path.exists(shp_file):
+        g.create_roi_shp(shp_file=shp_file, dwnscaling_factor=10)
+
+    # 2) deglint the 10 m bands using band 8, and plot correlations
+    deglint_BList_10m = g.hedley_2005(
+        vis_band_ids=["2", "3", "4"],
+        nir_band_id="8",
+        odir=hedley_dir,
+        roi_shpfile=shp_file,
+        plot=True,
+    )
+    # the deglinted bands are saved as geotifs in hedley_dir,
+    # see deglint_BList_10m. The correlation plots are also 
+    # saved in hedley_dir
+
+    # 3) deglint the 20- and 60- m bands using band 8A (20 m)
+    deglint_BList_other = g.hedley_2005(
+        vis_band_ids=["1", "5", "6"],
+        nir_band_id="8A",
+        odir=hedley_dir,
+        roi_shpfile=shp_file,
+        plot=True,
+    )
+    # In Hedley et al. (2019), band 9 was used to deglint band 1
+    # However, band 9 isn't currently distruibuted because it's
+    # affected by water vapour. As such band 8A (20 m), in this
+    # example, is downscaled to 60 m and used to deglint Band 1.
+
+    # ---------------------- #
+    #     NIR SUBTRACTION    #
+    # ---------------------- #
+    # deglint Bands 2, 3, and 4 by subtracting Band 8
+    mnir_bandList_10m = g.nir_subtraction(
+        vis_band_ids=["2", "3", "4"], nir_band_id="8", odir=mnir_dir,
+    )
+    # the deglinted bands are saved as geotifs in mnir_dir,
+    # see mnir_bandList_10m
+
+    # deglint bands 1, 5 and 6 using band 8A
+    mnir_bandList_other = g.nir_subtraction(
+        vis_band_ids=["1", "5", "6"], nir_band_id="8A", odir=mnir_dir,
+    )
+
+if __name__ == "__main__":
+    main()
+```
+
+### Deglint Landsat-8 OLI
+Perform the various sunglint corrections on Landsat-8 OLI data.
+First source configs/sunglint.env
+
+```python
+#!/usr/bin/env python3
+
+import os
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+
+from os.path import join as pjoin
+
+import datacube
+from sungc import deglint
+
+dc = datacube.Datacube()
+# until wagl-water-atcor products become available,
+# test with nbart products.
+product = "nbart"
+
+dc_name = "ga_ls8c_ard_3"
+
+# Rottnest - Perth, WA
+avail_datasets = dc.find_datasets(
+    product=dc_name,
+    lon=(115.40, 115.80),
+    lat=(-31.60, -32.40),
+    time=("2020-02-02", "2020-02-04")
 )
 
 working_dir = "/path/to/somewhere/"
@@ -120,10 +263,11 @@ def main():
     # ---------------------- #
     #  Cox and Munk (1954)   #
     # ---------------------- #
-    # deglint Bands 2, 3 and 4 with Cox and Munk (1954).
-    # you need to provide a wind-speed (m/s)
+    # deglint Bands 1, 2, 3 and 4 with Cox and Munk (1954).
+    # you need to provide a wind-speed (m/s), here its been
+    # set to 5 m/s
     cm_bandList = g.cox_munk(
-        vis_band_ids=["2", "3", "4"],
+        vis_band_ids=["1", "2", "3", "4"],
         odir=cox_munk_dir,
         wind_speed=5,
     )
@@ -133,31 +277,31 @@ def main():
     # ---------------------- #
     #  Hedley et al. (2019)  #
     # ---------------------- #
-    # deglint Bands 2, 3 and 4 using Hedley et al. (2005)
+    # deglint Bands 1, 2, 3 and 4 using Hedley et al. (2005)
 
     # 1) create shapefile with an interactive matplotlib figure
     shp_file = pjoin(hedley_dir, g.obase_shp)
     if not os.path.exists(shp_file):
         g.create_roi_shp(shp_file=shp_file, dwnscaling_factor=10)
 
-    # 2) deglint the 10 m bands using band 8, and plot correlations
-    deglint_BList_10m = g.hedley_2005(
-        vis_band_ids=["2", "3", "4"],
-        nir_band_id="8",
+    # 2) deglint the 30 m bands using band 6, and plot correlations
+    deglint_BList = g.hedley_2005(
+        vis_band_ids=["1", "2", "3", "4"],
+        nir_band_id="6",
         odir=hedley_dir,
         roi_shpfile=shp_file,
         plot=True,
     )
     # the deglinted bands are saved as geotifs in hedley_dir,
-    # see deglint_BList_10m. The correlation plots are also 
+    # see deglint_BList. The correlation plots are also
     # saved in hedley_dir
 
     # ---------------------- #
     #     NIR SUBTRACTION    #
     # ---------------------- #
-    # deglint Bands 2, 3, and 4 by subtracting Band 8
+    # deglint Bands 1, 2, 3, and 4 by subtracting Band 6
     mnir_bandList = g.nir_subtraction(
-        vis_band_ids=["2", "3", "4"], nir_band_id="8", odir=mnir_dir,
+        vis_band_ids=["1", "2", "3", "4"], nir_band_id="6", odir=mnir_dir,
     )
     # the deglinted bands are saved as geotifs in mnir_dir,
     # see mnir_bandList
