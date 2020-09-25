@@ -27,3 +27,4 @@ nosetests.xml
 MANIFEST
 venv
 build
+version.py

@@ -2,6 +2,7 @@
 
 import numpy as np
 
+
 def generate_tiles(samples, lines, xtile=None, ytile=None):
     """
     Generates a list of tile indices for a 2D array. Taken from
@@ -41,6 +42,7 @@ def generate_tiles(samples, lines, xtile=None, ytile=None):
         >>>     subset = array[tile]  # 2D
         >>>     subset = array[:,tile[0],tile[1]]  # 3D
     """
+
     def create_tiles(samples, lines, xstart, ystart):
         """
         Creates a generator object for the tiles.

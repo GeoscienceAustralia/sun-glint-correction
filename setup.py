@@ -11,9 +11,6 @@ from setuptools import setup, find_packages
 HERE = pathlib.Path(__file__).parent
 README = (HERE / "README.md").read_text()
 
-#    version=versioneer.get_version(),
-#    cmdclass=versioneer.get_cmdclass(),
-
 setup(
     name="sungc",
     description=(
@@ -25,7 +22,7 @@ setup(
     author="Rodrigo A. Garcia",
     author_email="earth.observation@ga.gov.au",
     use_scm_version=True,
-    setup_requires=['setuptools_scm'],
+    setup_requires=["setuptools_scm"],
     packages=find_packages(exclude=("tests", "tests.*")),
     package_data={"": ["*.json", "*.yaml"]},
     license="Apache Software License 2.0",
@@ -45,5 +42,7 @@ setup(
         "shapely",
         "rasterio",
         "matplotlib",
+        "numexpr",
+        "mpl_toolkits",
     ],
 )

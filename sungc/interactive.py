@@ -6,17 +6,20 @@ import rasterio
 import numpy as np
 import matplotlib.pyplot as plt
 
-from rasterio import mask
 from shapely import geometry
 from matplotlib import patches
 from PIL import Image, ImageDraw
 
+"""
 ## --------------------------------------------------- ##
 ## --------------------------------------------------- ##
 ##     CODE THAT ALLOWS THE USER TO INTERACTIVELY      ##
 ##            SELECT A ROI FROM IMAGERY                ##
 ## --------------------------------------------------- ##
 ## --------------------------------------------------- ##
+"""
+
+
 class ROI_Selector(object):
     """
     An interactive polygon editor.
@@ -79,9 +82,7 @@ class ROI_Selector(object):
         canvas = self.poly.figure.canvas
         canvas.mpl_connect("draw_event", self.draw_callback)
         canvas.mpl_connect("button_press_event", self.button_press_callback)
-        canvas.mpl_connect(
-            "button_release_event", self.button_release_callback
-        )
+        canvas.mpl_connect("button_release_event", self.button_release_callback)
         canvas.mpl_connect("key_press_event", self.key_press_callback)
         canvas.mpl_connect("motion_notify_event", self.motion_notify_callback)
         self.canvas = canvas
@@ -123,17 +124,16 @@ class ROI_Selector(object):
             poly_coords.append((x, y))
 
         # Define a polygon feature geometry with one attribute
-        schema = {
-            "geometry": "Polygon",
-            "properties": {"id": "str"},
-        }
+        schema = {"geometry": "Polygon", "properties": {"id": "str"}}
 
         # Write a new Shapefile
         with fiona.open(shp_file, "w", "ESRI Shapefile", schema) as c:
-            c.write({
-                "geometry": geometry.mapping(geometry.Polygon(poly_coords)),
-                "properties": {'id': "deep-water-polygon"},
-            })
+            c.write(
+                {
+                    "geometry": geometry.mapping(geometry.Polygon(poly_coords)),
+                    "properties": {"id": "deep-water-polygon"},
+                }
+            )
 
     def verts_from_shp(self, shp_file):
         """
@@ -149,7 +149,6 @@ class ROI_Selector(object):
 
         print(shapes)
         sys.exit()
-
 
     def get_mask(self, shape):
         """Return image mask given by mask creator"""
@@ -220,9 +219,7 @@ class ROI_Selector(object):
 
     def button_press_callback(self, event):
         "whenever a mouse button is pressed"
-        ignore = (
-            not self.showverts or event.inaxes is None or event.button != 1
-        )
+        ignore = not self.showverts or event.inaxes is None or event.button != 1
         if ignore:
             return
         self._ind = self.get_ind_under_cursor(event)
@@ -252,9 +249,7 @@ class ROI_Selector(object):
             if ind == 0 or ind == self.last_vert_ind:
                 print("Cannot delete root node")
                 return
-            self.poly.xy = [
-                tup for i, tup in enumerate(self.poly.xy) if i != ind
-            ]
+            self.poly.xy = [tup for i, tup in enumerate(self.poly.xy) if i != ind]
             self._update_line()
 
         elif event.key == "i":

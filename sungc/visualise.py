@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 import os
-import sys
 import numpy as np
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 
 from matplotlib.colors import LinearSegmentedColormap
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
 
 def display_image(img, out_png):
     fig, ax = plt.subplots(nrows=1, ncols=1)
@@ -18,9 +18,7 @@ def display_image(img, out_png):
     if out_png:
         ax.xaxis.set_major_locator(plt.NullLocator())
         ax.yaxis.set_major_locator(plt.NullLocator())
-        fig.savefig(
-            out_png, format="png", bbox_inches="tight", pad_inches=0.0, dpi=400
-        )
+        fig.savefig(out_png, format="png", bbox_inches="tight", pad_inches=0.0, dpi=400)
         print("    Saved '{0}'".format(out_png))
 
     return ax
@@ -50,9 +48,7 @@ def display_scaled_image(img, lower_val, upper_val, out_png):
     if out_png:
         ax.xaxis.set_major_locator(plt.NullLocator())
         ax.yaxis.set_major_locator(plt.NullLocator())
-        fig.savefig(
-            out_png, format="png", bbox_inches="tight", pad_inches=0.0, dpi=700
-        )
+        fig.savefig(out_png, format="png", bbox_inches="tight", pad_inches=0.0, dpi=700)
         print("    Saved '{0}'".format(out_png))
 
 
@@ -95,31 +91,19 @@ def display_two_images(im1, im2, ann1=None, ann2=None, out_png=None):
     ax[0].axis("off")
     if ann1:
         ax[0].annotate(
-            s=ann1,
-            xy=(0.05, 0.95),
-            xycoords="axes fraction",
-            fontsize=10,
-            color="w",
+            s=ann1, xy=(0.05, 0.95), xycoords="axes fraction", fontsize=10, color="w"
         )
 
     ax[1].imshow(im2, interpolation="None")
     ax[1].axis("off")
     if ann2:
         ax[1].annotate(
-            s=ann2,
-            xy=(0.05, 0.95),
-            xycoords="axes fraction",
-            fontsize=10,
-            color="w",
+            s=ann2, xy=(0.05, 0.95), xycoords="axes fraction", fontsize=10, color="w"
         )
 
     if out_png:
-        fig.subplots_adjust(
-            left=0.01, right=0.99, bottom=0.01, top=0.99, wspace=0.01
-        )
-        fig.savefig(
-            os.path.join(out_png), format="png", bbox_inches="tight", dpi=400,
-        )
+        fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.99, wspace=0.01)
+        fig.savefig(os.path.join(out_png), format="png", bbox_inches="tight", dpi=400)
 
 
 def plot_correlations(
@@ -147,7 +131,7 @@ def plot_correlations(
 
     ax : matplotlib.axes._subplots object
         Reusing the axes object
-    
+
     r2 : float
         The correlation coefficient squared of the linear regression
         between NIR and a VIS band
@@ -202,13 +186,11 @@ def plot_correlations(
     # which we are not interested in, and hence would want
     # them to appear as a white colour (alpha ~ 0)
     num_alpha = 25
-    colour_array[0:num_alpha,-1] = np.linspace(0.0,1.0,num_alpha)
-    colour_array[num_alpha:,-1] = 1
+    colour_array[0:num_alpha, -1] = np.linspace(0.0, 1.0, num_alpha)
+    colour_array[num_alpha:, -1] = 1
 
     # create a colormap object
-    cmap = LinearSegmentedColormap.from_list(
-        name='jet_alpha', colors=colour_array
-    )
+    cmap = LinearSegmentedColormap.from_list(name="jet_alpha", colors=colour_array)
 
     # ----------------------------------- #
     #  Plot density using np.histogram2d  #
@@ -218,20 +200,17 @@ def plot_correlations(
 
     nbins = [int(xbin_high - xbin_low), int(ybin_high - ybin_low)]
 
-    bin_range = [
-        [int(xbin_low), int(xbin_high)],
-        [int(ybin_low), int(ybin_high)],
-    ]
+    bin_range = [[int(xbin_low), int(xbin_high)], [int(ybin_low), int(ybin_high)]]
 
     hist2d, xedges, yedges = np.histogram2d(
         x=nir_vals, y=vis_vals, bins=nbins, range=bin_range
     )
 
     # normalised hist to range [0...1] then rotate and flip
-    hist2d = np.flipud(np.rot90(hist2d/hist2d.max()))
+    hist2d = np.flipud(np.rot90(hist2d / hist2d.max()))
 
     # Mask zeros
-    hist_masked = np.ma.masked_where(hist2d==0, hist2d)
+    hist_masked = np.ma.masked_where(hist2d == 0, hist2d)
 
     # use pcolormesh to plot the hist2D
     qm = ax.pcolormesh(xedges, yedges, hist_masked, cmap=cmap)
@@ -260,7 +239,11 @@ def plot_correlations(
     # ----------------------------------- #
     x_range = np.array([xbin_low, xbin_high])
     (ln,) = ax.plot(
-        x_range, slope * (x_range) + y_inter, color="k", linestyle="-", label="linear regr."
+        x_range,
+        slope * (x_range) + y_inter,
+        color="k",
+        linestyle="-",
+        label="linear regr.",
     )
 
     # ----------------------------------- #
@@ -271,14 +254,11 @@ def plot_correlations(
 
     # add annotation
     ann_str = (
-        r"$r^{2}$"
-        +" = {0:0.2f}\n"
+        r"$r^{2}$" + " = {0:0.2f}\n"
         "slope = {1:0.2f}\n"
         "y-inter = {2:0.2f}".format(r2, slope, y_inter)
     )
-    ann = ax.annotate(
-        s=ann_str, xy=(0.02, 0.76), xycoords="axes fraction", fontsize=10,
-    )
+    ann = ax.annotate(s=ann_str, xy=(0.02, 0.76), xycoords="axes fraction", fontsize=10)
 
     # Add labels to figure
     bnir_label = "B" + nir_bandID
@@ -289,8 +269,8 @@ def plot_correlations(
 
     if scale_factor is not None:
         if scale_factor > 1:
-            xlabel += " "+r"$\times$"+" {0}".format(int(scale_factor))
-            ylabel += " "+r"$\times$"+" {0}".format(int(scale_factor))
+            xlabel += " " + r"$\times$" + " {0}".format(int(scale_factor))
+            ylabel += " " + r"$\times$" + " {0}".format(int(scale_factor))
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -301,9 +281,7 @@ def plot_correlations(
         odir, "Correlation_{0}_vs_{1}.png".format(bnir_label, bvis_label)
     )
 
-    fig.savefig(
-        png_file, format="png", bbox_inches="tight", pad_inches=0.1, dpi=300,
-    )
+    fig.savefig(png_file, format="png", bbox_inches="tight", pad_inches=0.1, dpi=300)
 
     # delete all lines and annotations from figure,
     # so it can be reused in the next iteration
@@ -321,9 +299,7 @@ def extract_Percentiles(band, lowerPercentile, upperPercentile):
     very nice RGB images.
     """
     return np.percentile(
-        band.flatten(),
-        (lowerPercentile, upperPercentile),
-        interpolation="linear",
+        band.flatten(), (lowerPercentile, upperPercentile), interpolation="linear"
     )
 
 
@@ -337,9 +313,7 @@ def linear_stretching(band, new_min, new_max):
     return (band - new_min) * Grad
 
 
-def enhanced_RGB_stretch(
-    refl_img, fmask, rgb_ix, nodata, lower_perc, upper_perc
-):
+def enhanced_RGB_stretch(refl_img, fmask, rgb_ix, nodata, lower_perc, upper_perc):
     """
     Parameters
     ----------
@@ -396,9 +370,7 @@ def enhanced_RGB_stretch(
     msk_dims = fmask.shape
 
     if (dims[1] != msk_dims[0]) or (dims[2] != msk_dims[1]):
-        raise Exception(
-            "\nERROR: Dimension mismatch between fmask and rgb image\n"
-        )
+        raise Exception("\nERROR: Dimension mismatch between fmask and rgb image\n")
 
     if lower_perc >= upper_perc:
         raise ValueError("\nERROR: Lower percentile >= upper percentile\n")
@@ -432,9 +404,7 @@ def enhanced_RGB_stretch(
 
         # Scaling the land and ocean separately
         # to obtain the best RGB image.
-        other_lowerVal, other_upperVal = extract_Percentiles(
-            other_pixels, 1.0, 99.0
-        )
+        other_lowerVal, other_upperVal = extract_Percentiles(other_pixels, 1.0, 99.0)
         ocean_lowerVal, ocean_upperVal = extract_Percentiles(
             ocean_pixels, lower_perc, upper_perc
         )
@@ -460,9 +430,7 @@ def enhanced_RGB_stretch(
     return scaled_rgb
 
 
-def seadas_style_RGB(
-    refl_img, rgb_ix, scale_factor,
-):
+def seadas_style_RGB(refl_img, rgb_ix, scale_factor):
     """
     Create a (NASA-OBPG) SeaDAS style RGB. A very simple transformation
     of reflectances is used to create very impressive RGB's
