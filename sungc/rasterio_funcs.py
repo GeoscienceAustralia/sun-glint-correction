@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import os
-import sys
 import fiona
 import rasterio
 import rasterio.mask
@@ -9,9 +8,11 @@ import numpy as np
 
 from rasterio.warp import reproject
 
+
 def get_basename(filename):
     """ Get a file's basename without extension """
     return os.path.basename(os.path.splitext(filename)[0])
+
 
 def get_resample_bandName(filename, spatialRes):
     """ Get the basename of the resampled band """
@@ -20,11 +21,10 @@ def get_resample_bandName(filename, spatialRes):
         out_base = "fmask-resmpl-{0}m.tif".format(spatialRes)
 
     else:
-        out_base = "{0}-resmpl-{1}m.tif".format(
-            get_basename(filename), spatialRes
-        )
+        out_base = "{0}-resmpl-{1}m.tif".format(get_basename(filename), spatialRes)
 
     return out_base
+
 
 def load_singleBand(rio_file):
     """
@@ -53,7 +53,7 @@ def load_singleBand(rio_file):
 def load_bands(band_list, scale_factor, apply_scaling):
     """
     load the bands in band_list into a 3D array.
-        
+
     Parameters
     ----------
     band_list : list of paths
@@ -85,7 +85,7 @@ def load_bands(band_list, scale_factor, apply_scaling):
                     data_type = np.dtype(ds.dtypes[0])
 
                 spectral_cube = np.zeros(
-                    [nBands, ds.height, ds.width], order="C", dtype=data_type,
+                    [nBands, ds.height, ds.width], order="C", dtype=data_type
                 )
                 meta_dict = ds.meta.copy()
 
@@ -105,12 +105,7 @@ def load_bands(band_list, scale_factor, apply_scaling):
 
 
 def resample_bands(
-    bandList,
-    resample_spatialRes,
-    resample_option,
-    load=False,
-    save=True,
-    odir=None,
+    bandList, resample_spatialRes, resample_option, load=False, save=True, odir=None
 ):
     """
     Resample bands (listed in resample_bands) to the specified
@@ -205,7 +200,9 @@ def resample_bands(
                 raise Exception("\n{0} does not exist.".format(out_dir))
 
         else:
-            out_dir = os.path.dirname(ref_band)
+            out_dir = os.path.dirname(
+                ref_band  # pylint: disable=E0602 # noqa: F821,E501 TODO FIXME Oceancolour-RG
+            )
 
     if load:
         spectral_cube = []
@@ -230,9 +227,7 @@ def resample_bands(
 
             # do stuff to get ref_ds.transform, ref_ds.crs
             # ref_ds.height, ref_ds.width
-            resmpl_band = np.zeros(
-                [nRows, nCols], order="C", dtype=data_type
-            )
+            resmpl_band = np.zeros([nRows, nCols], order="C", dtype=data_type)
 
             reproject(
                 source=rasterio.band(src_ds, 1),
@@ -252,8 +247,7 @@ def resample_bands(
             if save:
                 # save geotif
                 resmpl_tif = os.path.join(
-                    out_dir,
-                    get_resample_bandName(bandList[z], resample_spatialRes),
+                    out_dir, get_resample_bandName(bandList[z], resample_spatialRes)
                 )
 
                 with rasterio.open(resmpl_tif, "w", **metad) as dst:
@@ -276,9 +270,7 @@ def resample_bands(
 
         else:
             # return a 3-dimensional numpy.ndarray
-            spectral_cube = np.array(
-                spectral_cube, order="C", dtype=data_type
-            )
+            spectral_cube = np.array(spectral_cube, order="C", dtype=data_type)
     else:
         metad = None
 
@@ -289,6 +281,7 @@ def resample_bands(
     # if (save is True) and (len(resmpl_ofiles) == 0):
     #     resampling was not successful for any listed bands
     return resmpl_ofiles, spectral_cube, metad
+
 
 def resample_file_to_ds(image_file, ref_ds, resample_option):
     """
@@ -319,9 +312,7 @@ def resample_file_to_ds(image_file, ref_ds, resample_option):
     """
     with rasterio.open(image_file, "r") as src_ds:
         image = np.zeros(
-            [ref_ds.height, ref_ds.width],
-            order="C",
-            dtype=np.dtype(src_ds.dtypes[0]),
+            [ref_ds.height, ref_ds.width], order="C", dtype=np.dtype(src_ds.dtypes[0])
         )
 
         reproject(
@@ -334,6 +325,7 @@ def resample_file_to_ds(image_file, ref_ds, resample_option):
             resampling=resample_option,
         )
     return image
+
 
 def resample_band_to_ds(img, img_meta, ref_ds, resample_option):
     """
@@ -365,9 +357,7 @@ def resample_band_to_ds(img, img_meta, ref_ds, resample_option):
     resampled_img : numpy.ndarray
         2-Dimensional numpy array
     """
-    resampled_img = np.zeros(
-        [ref_ds.height, ref_ds.width], order="C", dtype=img.dtype
-    )
+    resampled_img = np.zeros([ref_ds.height, ref_ds.width], order="C", dtype=img.dtype)
 
     reproject(
         source=img,
@@ -409,9 +399,7 @@ def load_mask_from_shp(shp_file, ref_ds):
         shapes = [feature["geometry"] for feature in shp]
 
     # pixels outside polygon in roi_mask = nodata value
-    mask_im, mask_transform = rasterio.mask.mask(
-        dataset=ref_ds, shapes=shapes
-    )
+    mask_im, mask_transform = rasterio.mask.mask(dataset=ref_ds, shapes=shapes)
     if mask_im.ndim == 3:
         mask_im = np.array(mask_im[0, :, :], order="K", copy=True)
 

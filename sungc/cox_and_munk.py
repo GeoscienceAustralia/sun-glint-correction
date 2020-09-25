@@ -57,7 +57,9 @@ def cm_sun_glint(
     theta_view = numpy.deg2rad(  # noqa # pylint: disable=unused-variable
         satellite_view, dtype="float32"
     )
-    theta_sun = numpy.deg2rad(solar_zenith, dtype="float32")  # noqa # pylint: disable=unused-variable
+    theta_sun = numpy.deg2rad(  # noqa # pylint: disable=unused-variable
+        solar_zenith, dtype="float32"
+    )
     theta_phi = numpy.deg2rad(  # noqa # pylint: disable=unused-variable
         relative_azimuth, dtype="float32"
     )

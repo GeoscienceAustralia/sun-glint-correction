@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 
 import os
-import sys
 import pathlib
 import rasterio
 import numpy as np
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-from pprint import pprint
 from scipy import stats
 from datetime import datetime
 from os.path import join as pjoin
@@ -40,12 +37,11 @@ class GlintCorr:
             Datacube dataset object
 
         product : str
-            Product name 
+            Product name
 
         Examples
         --------
         """
-        base_dir = dc_dataset.local_path.parent
 
         self.product = product
         self.group_path = dc_dataset.local_path.parent
@@ -88,13 +84,11 @@ class GlintCorr:
     def deglint_ofile(self, spatialRes, out_dir, visible_bfile):
         """ Get deglint filename """
         vis_bname = os.path.basename(os.path.splitext(visible_bfile)[0])
-        return pjoin(
-            out_dir, "{0}-deglint-{1}m.tif".format(vis_bname, spatialRes),
-        )
+        return pjoin(out_dir, "{0}-deglint-{1}m.tif".format(vis_bname, spatialRes))
 
     def check_sensor(self):
         if self.sensor not in SUPPORTED_SENSORS:
-            msg = f"Supported sensors are: {SUPPORTED_SENSORS}, recieved {sensor}"
+            msg = f"Supported sensors are: {SUPPORTED_SENSORS}, recieved {self.sensor}"
             raise Exception(msg)
 
     def check_path_exists(self, path):
@@ -124,7 +118,7 @@ class GlintCorr:
             if not (req_bn in bandNums):
                 raise Exception(
                     "B{0} is missing from bands [{1}]".format(
-                        req_bn, ", ".join(["B" + str(i) for i in bandNums]),
+                        req_bn, ", ".join(["B" + str(i) for i in bandNums])
                     )
                 )
 
@@ -154,9 +148,7 @@ class GlintCorr:
                 filename = self.group_path.joinpath(basename)
 
         if not filename:
-            raise Exception(
-                "\nfilename with keyword ({0}) not found".format(keyword)
-            )
+            raise Exception("\nfilename with keyword ({0}) not found".format(keyword))
 
         return filename
 
@@ -206,9 +198,7 @@ class GlintCorr:
             sensor = dc_dataset.metadata_doc["platform"]["code"].lower()
         elif "properties" in dc_dataset.metadata_doc:
             # newer version
-            sensor = dc_dataset.metadata_doc["properties"][
-                "eo:platform"
-            ].lower()
+            sensor = dc_dataset.metadata_doc["properties"]["eo:platform"].lower()
         else:
             raise Exception(
                 "neither platform nor properties keys were found in metadata_doc"
@@ -243,8 +233,7 @@ class GlintCorr:
         if "properties" in dc_dataset.metadata_doc:
             # newer version
             overpass_datetime = datetime.strptime(
-                dc_dataset.metadata_doc["properties"]["datetime"],
-                "%Y-%m-%d %H:%M:%S.%fZ",
+                dc_dataset.metadata_doc["properties"]["datetime"], "%Y-%m-%d %H:%M:%S.%fZ"
             )
 
         if not overpass_datetime:
@@ -288,9 +277,7 @@ class GlintCorr:
                 bandList.append(self.group_path.joinpath(basename))
 
         if not bandList:
-            raise Exception(
-                "Could not find any geotifs in '{0}'".format(self.group_path)
-            )
+            raise Exception("Could not find any geotifs in '{0}'".format(self.group_path))
 
         return bandList, bandNums, bandNames
 
@@ -308,13 +295,9 @@ class GlintCorr:
         Exception if fmask file is not found
         """
         if "fmask" in self.meas_dict:
-            fmask_file = self.group_path.joinpath(
-                self.meas_dict["fmask"]["path"]
-            )
+            fmask_file = self.group_path.joinpath(self.meas_dict["fmask"]["path"])
         elif "oa_fmask" in self.meas_dict:
-            fmask_file = self.group_path.joinpath(
-                self.meas_dict["oa_fmask"]["path"]
-            )
+            fmask_file = self.group_path.joinpath(self.meas_dict["oa_fmask"]["path"])
         else:
             raise Exception("\nCould not find the fmask file")
 
@@ -328,7 +311,7 @@ class GlintCorr:
         ----------
         dwnscale_factor : float >= 1
             The downscaling factor.
-            If dwnscale_factor = 3 then the spatial resolution 
+            If dwnscale_factor = 3 then the spatial resolution
             of the quicklook RGB will be reduced by a factor
             of three from the native resolution of the sensors'
             RGB bands.
@@ -422,7 +405,7 @@ class GlintCorr:
             The downscaling factor used to downscale the native
             RGB bands to generate the quicklook RGB.
 
-            If dwnscale_factor = 3 then the spatial resolution 
+            If dwnscale_factor = 3 then the spatial resolution
             of the quicklook RGB will be reduced by a factor
             of three from the native resolution of the sensors'
             RGB bands.
@@ -451,9 +434,7 @@ class GlintCorr:
         # close the ROI_Selector
         mc = None
 
-    def nir_subtraction(
-        self, vis_band_ids, nir_band_id, odir=None, waterVal=5,
-    ):
+    def nir_subtraction(self, vis_band_ids, nir_band_id, odir=None, waterVal=5):
         """
         This sunglint correction assumes that glint reflectance
         is nearly spectrally flat in the VIS-NIR. Hence, the NIR
@@ -563,32 +544,22 @@ class GlintCorr:
                     )
 
                     waterIx = np.where(
-                        (fmask == waterVal)
-                        & (vis_im != nodata)
-                        & (nir_im_res != nodata)
+                        (fmask == waterVal) & (vis_im != nodata) & (nir_im_res != nodata)
                     )
 
                     # 1. deglint water pixels
-                    deglint_band[waterIx] = (
-                        vis_im[waterIx] - nir_im_res[waterIx]
-                    )
+                    deglint_band[waterIx] = vis_im[waterIx] - nir_im_res[waterIx]
 
                     # Apply mask:
-                    deglint_band[
-                        (vis_im == nodata) | (nir_im_res == nodata)
-                    ] = nodata
+                    deglint_band[(vis_im == nodata) | (nir_im_res == nodata)] = nodata
 
                 else:
                     waterIx = np.where(
-                        (fmask == waterVal)
-                        & (vis_im != nodata)
-                        & (nir_im != nodata)
+                        (fmask == waterVal) & (vis_im != nodata) & (nir_im != nodata)
                     )
 
                     deglint_band[waterIx] = vis_im[waterIx] - nir_im[waterIx]
-                    deglint_band[
-                        (vis_im == nodata) | (nir_im == nodata)
-                    ] = nodata
+                    deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
 
             # 2. write geotiff
             deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
@@ -759,9 +730,7 @@ class GlintCorr:
                 # ------------------------------ #
                 roi_mask = rio_funcs.load_mask_from_shp(roi_shpfile, dsVIS)
 
-            flag_mask = (
-                (fmask != waterVal) | (vis_im == nodata) | (nir_im == nodata)
-            )
+            flag_mask = (fmask != waterVal) | (vis_im == nodata) | (nir_im == nodata)
             water_mask = ~flag_mask
             roi_mask[flag_mask] = nodata
 
@@ -812,7 +781,7 @@ class GlintCorr:
                     scale_factor=self.scale_factor,
                     nir_bandID=nir_band_id,
                     vis_bandID=vis_band_ids[z],
-                    odir=odir
+                    odir=odir,
                 )
         # endfor z
 

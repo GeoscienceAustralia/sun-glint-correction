@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 
-import os
-import sys
-import rasterio
 import numpy as np
 import numexpr as nexpr
-import matplotlib.pyplot as plt
-from os.path import join as pjoin
 
 from sungc.tiler import generate_tiles
 from sungc.rasterio_funcs import load_singleBand
+
 
 def calc_pfresnel(w, n_sw=1.34):
     """
@@ -28,7 +24,9 @@ def calc_pfresnel(w, n_sw=1.34):
     p_fresnel : numpy.ndarray (np.float32/64)
         The fresnel reflectance
     """
-    w_pr = nexpr.evaluate("arcsin(sin(w)/n_sw)")
+    w_pr = nexpr.evaluate(  # noqa: F841,E501 # pylint: disable=unused-variable
+        "arcsin(sin(w)/n_sw)"
+    )
     p_fres = nexpr.evaluate(
         "0.5*((sin(w-w_pr)/sin(w+w_pr))**2 + (tan(w-w_pr)/tan(w+w_pr))**2)"
     )
@@ -51,7 +49,7 @@ def cm_sunglint(
     Parameters
     ----------
     view_zenith_file : str
-        filename of sensor view-zenith angle image 
+        filename of sensor view-zenith angle image
         (units of image data: degrees)
 
     solar_zenith_file : str
@@ -122,15 +120,13 @@ def cm_sunglint(
 
     p_fresnel = None
     if return_fresnel:
-        p_fresnel = np.zeros(
-            [nRows, nCols], order="C", dtype=view_zenith.dtype
-        )
+        p_fresnel = np.zeros([nRows, nCols], order="C", dtype=view_zenith.dtype)
 
     # Define parameters needed for the wind-direction-independent model
-    pi_ = np.pi
+    pi_ = np.pi  # noqa # pylint: disable=unused-variable
     n_sw = 1.34  # refractive index of seawater
     deg2rad = np.pi / 180.0
-    sigma2 = 0.003 + 0.00512 * wind_speed
+    sigma2 = 0.003 + 0.00512 * wind_speed  # noqa # pylint: disable=unused-variable
 
     # This implementation creates 16 float32/64 numpy.ndarray's with
     # the same dimensions as the inputs (view_zenith, solar_zenith,
@@ -145,35 +141,42 @@ def cm_sunglint(
         phi_raz[phi_raz > 180.0] -= 360.0
         phi_raz *= deg2rad
 
-        theta_szn = solar_zenith[t_ix] * deg2rad
-        theta_vzn = view_zenith[t_ix] * deg2rad
+        theta_szn = solar_zenith[t_ix] * deg2rad  # noqa # pylint: disable=unused-variable
+        theta_vzn = view_zenith[t_ix] * deg2rad  # noqa # pylint: disable=unused-variable
 
-        cos_theta_szn = nexpr.evaluate("cos(theta_szn)")
-        cos_theta_vzn = nexpr.evaluate("cos(theta_vzn)")
+        cos_theta_szn = nexpr.evaluate(  # noqa # pylint: disable=unused-variable
+            "cos(theta_szn)"
+        )
+        cos_theta_vzn = nexpr.evaluate(  # noqa # pylint: disable=unused-variable
+            "cos(theta_vzn)"
+        )  # noqa # pylint: disable=unused-variable
 
         # compute cos(w)
         # w = angle of incidence of a light ray at the water surface
         # use numexpr instead
-        cos_2w = nexpr.evaluate(
-            "cos_theta_szn*cos_theta_vzn "
-            "+ sin(theta_szn)*sin(theta_vzn)*sin(phi_raz)"
+        cos_2w = nexpr.evaluate(  # noqa # pylint: disable=unused-variable
+            "cos_theta_szn*cos_theta_vzn " "+ sin(theta_szn)*sin(theta_vzn)*sin(phi_raz)"
         )
 
         # use trig. identity, cos(x/2) = +/- sqrt{ [1 + cos(x)] / 2 }
         # hence,
         # cos(2w/2) = cos(w) = +/- sqrt{ [1 + cos(2w)] / 2 }
-        cos_w = nexpr.evaluate("((1.0 + cos_2w) / 2.0) ** 0.5")
+        cos_w = nexpr.evaluate(  # noqa # pylint: disable=unused-variable
+            "((1.0 + cos_2w) / 2.0) ** 0.5"
+        )  # noqa # pylint: disable=unused-variable
 
         # compute cos(B), where B = beta;  numpy.ndarray
-        cos_B = nexpr.evaluate(
+        cos_B = nexpr.evaluate(  # noqa: F841,E501 # pylint: disable=unused-variable
             "(cos_theta_szn + cos_theta_vzn) / (2.0 * cos_w)"
-        )
+        )  # noqa # pylint: disable=unused-variable
 
         # compute tan(B)^2 = sec(B)^2 -1;  numpy.ndarray
-        tanB_2 = nexpr.evaluate("(1.0 / (cos_B ** 2.0)) - 1.0")
+        tanB_2 = nexpr.evaluate(  # noqa: F841,E501 # pylint: disable=unused-variable
+            "(1.0 / (cos_B ** 2.0)) - 1.0"
+        )  # noqa # pylint: disable=unused-variable
 
         # compute surface slope distribution:
-        dist_SurfSlope = nexpr.evaluate(
+        dist_SurfSlope = nexpr.evaluate(  # noqa # pylint: disable=unused-variable
             "1.0 / (pi_ * sigma2) * exp(-1.0 * tanB_2 / sigma2)"
         )
 
