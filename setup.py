@@ -42,5 +42,7 @@ setup(
         "shapely",
         "rasterio",
         "matplotlib",
+        "numexpr",
+        "mpl_toolkits",
     ],
 )
