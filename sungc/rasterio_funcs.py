@@ -14,19 +14,19 @@ def get_basename(filename):
     return os.path.basename(os.path.splitext(filename)[0])
 
 
-def get_resample_bandName(filename, spatialRes):
+def get_resample_bandname(filename, spatial_res):
     """ Get the basename of the resampled band """
     if filename.lower().find("fmask") != -1:
         # fmask has a different naming convention
-        out_base = "fmask-resmpl-{0}m.tif".format(spatialRes)
+        out_base = "fmask-resmpl-{0}m.tif".format(spatial_res)
 
     else:
-        out_base = "{0}-resmpl-{1}m.tif".format(get_basename(filename), spatialRes)
+        out_base = "{0}-resmpl-{1}m.tif".format(get_basename(filename), spatial_res)
 
     return out_base
 
 
-def load_singleBand(rio_file):
+def load_singleband(rio_file):
     """
     Loads file as a numpy.ndarray
 
@@ -72,20 +72,20 @@ def load_bands(band_list, scale_factor, apply_scaling):
     spectral_cube : numpy.ndarray
         multi-band array with dimensions of [nBands, nRows, nCols]
     """
-    nBands = len(band_list)
+    nbands = len(band_list)
     spectral_cube = None
     nodata_val = None
     meta_dict = None
     data_type = np.float32
 
-    for z in range(0, nBands):
+    for z in range(0, nbands):
         with rasterio.open(band_list[z], "r") as ds:
             if z == 0:
                 if not apply_scaling:
                     data_type = np.dtype(ds.dtypes[0])
 
                 spectral_cube = np.zeros(
-                    [nBands, ds.height, ds.width], order="C", dtype=data_type
+                    [nbands, ds.height, ds.width], order="C", dtype=data_type
                 )
                 meta_dict = ds.meta.copy()
 
@@ -100,25 +100,25 @@ def load_bands(band_list, scale_factor, apply_scaling):
             spectral_cube[z, :, :] = band
             meta_dict["band_{0}".format(z + 1)] = get_basename(band_list[z])
 
-    meta_dict["count"] = nBands
+    meta_dict["count"] = nbands
     return spectral_cube, meta_dict
 
 
 def resample_bands(
-    bandList, resample_spatialRes, resample_option, load=False, save=True, odir=None
+    bandlist, resample_spatial_res, resample_option, load=True, save=False, odir=None
 ):
     """
-    Resample bands (listed in resample_bands) to the specified
+    Resample bands (bandlist) to the specified
     spatial resolution using the specified resampling option
     such as bilinear interpolation, nearest neighbour, cubic
     etc. Bands have the option of being saved
 
     Parameters
     ----------
-    bandList : list
+    bandlist : list
         A list of paths to bands that will be resampled
 
-    resample_spatialRes : float > 0
+    resample_spatial_res : float > 0
         The resampled spatial resolution
 
     resample_option : <enum 'Resampling'> class
@@ -139,17 +139,13 @@ def resample_bands(
 
     save : bool
         if True
-            geotiff is saved into either
-            (a) odir (if specified), or;
-            (b) directory of ref_band (if odir=None)
+            geotiff is saved to odir
 
         if False
             geotiff is not saved
 
     odir : str or None
-        The directory where the resampled geotiff is
-        saved. if odir=None then ref_band directory
-        is used.
+        The directory where the resampled geotiff is saved.
 
     Returns
     -------
@@ -169,7 +165,8 @@ def resample_bands(
     Raises
     ------
     Exception
-        * resample_spatialRes <= 0
+        * resample_spatial_res <= 0
+        * if save=True and odir=None
         * if save=True and odir does not exist.
 
     Notes
@@ -182,15 +179,15 @@ def resample_bands(
        then resampling was not successful for any listed bands
 
     """
-    if resample_spatialRes <= 0:
-        raise Exception("\nresample_spatialRes must be a float > 0")
+    if resample_spatial_res <= 0:
+        raise Exception("\nresample_spatial_res must be a float > 0")
 
     metad = None
     data_type = None
     spectral_cube = None
     resmpl_ofiles = None
 
-    nBands = len(bandList)
+    nbands = len(bandlist)
 
     if save:
         resmpl_ofiles = []
@@ -200,34 +197,34 @@ def resample_bands(
                 raise Exception("\n{0} does not exist.".format(out_dir))
 
         else:
-            out_dir = os.path.dirname(
-                ref_band  # pylint: disable=E0602 # noqa: F821,E501 TODO FIXME Oceancolour-RG
+            raise Exception(
+                "\nresampled geotiff was requested to be saved, but odir not specified"
             )
 
     if load:
         spectral_cube = []
 
     # iterate through the list of bands to be resampled
-    for z in range(0, nBands):
+    for z in range(0, nbands):
 
-        with rasterio.open(bandList[z], "r") as src_ds:
+        with rasterio.open(bandlist[z], "r") as src_ds:
             data_type = np.dtype(src_ds.dtypes[0])
-            dwnscale_factor = resample_spatialRes / src_ds.transform.a
-            nRows = int(src_ds.height / dwnscale_factor)
-            nCols = int(src_ds.width / dwnscale_factor)
+            dwnscale_factor = resample_spatial_res / src_ds.transform.a
+            nrows = int(src_ds.height / dwnscale_factor)
+            ncols = int(src_ds.width / dwnscale_factor)
 
             res_transform = src_ds.transform * src_ds.transform.scale(
                 dwnscale_factor, dwnscale_factor
             )
 
             metad = src_ds.meta.copy()
-            metad["width"] = nCols
-            metad["height"] = nRows
+            metad["width"] = ncols
+            metad["height"] = nrows
             metad["transform"] = res_transform
 
             # do stuff to get ref_ds.transform, ref_ds.crs
             # ref_ds.height, ref_ds.width
-            resmpl_band = np.zeros([nRows, nCols], order="C", dtype=data_type)
+            resmpl_band = np.zeros([nrows, ncols], order="C", dtype=data_type)
 
             reproject(
                 source=rasterio.band(src_ds, 1),
@@ -239,7 +236,7 @@ def resample_bands(
                 resampling=resample_option,
             )
 
-            metad["band_{0}".format(z + 1)] = get_basename(bandList[z])
+            metad["band_{0}".format(z + 1)] = get_basename(bandlist[z])
 
             if load:
                 spectral_cube.append(np.copy(resmpl_band))
@@ -247,7 +244,7 @@ def resample_bands(
             if save:
                 # save geotif
                 resmpl_tif = os.path.join(
-                    out_dir, get_resample_bandName(bandList[z], resample_spatialRes)
+                    out_dir, get_resample_bandname(bandlist[z], resample_spatial_res)
                 )
 
                 with rasterio.open(resmpl_tif, "w", **metad) as dst:
@@ -262,9 +259,9 @@ def resample_bands(
 
     if load:
         # update nBands in metadata
-        metad["count"] = nBands
+        metad["count"] = nbands
 
-        if nBands == 1:
+        if nbands == 1:
             # return a 2-dimensional numpy.ndarray
             spectral_cube = np.copy(spectral_cube[0])
 
