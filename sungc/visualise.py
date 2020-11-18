@@ -26,19 +26,19 @@ def display_image(img, out_png):
 
 def display_scaled_image(img, lower_val, upper_val, out_png):
 
-    nRows, nCols = img.shape
+    nrows, ncols = img.shape
     scaled_img = np.array(img, order="K", copy=True)
 
-    lowerPercentile, upperPercentile = extract_Percentiles(img, 5, 95)
+    lower_percentile, upper_percentile = extract_percentiles(img, 5, 95)
     if lower_val:
         scaled_img[scaled_img < lower_val] = lower_val
     else:
-        scaled_img[scaled_img < lowerPercentile] = lowerPercentile
+        scaled_img[scaled_img < lower_percentile] = lower_percentile
 
     if upper_val:
         scaled_img[scaled_img > upper_val] = upper_val
     else:
-        scaled_img[scaled_img > upperPercentile] = upperPercentile
+        scaled_img[scaled_img > upper_percentile] = upper_percentile
 
     fig, ax = plt.subplots(nrows=1, ncols=1)
     ax.axis("off")
@@ -115,8 +115,8 @@ def plot_correlations(
     nir_vals,
     vis_vals,
     scale_factor,
-    nir_bandID,
-    vis_bandID,
+    nir_band_id,
+    vis_band_id,
     odir,
 ):
     """
@@ -154,10 +154,10 @@ def plot_correlations(
         The scale factor used to convert integers to reflectances
         that range [0...1]
 
-    nir_bandID : str
+    nir_band_id : str
         The NIR band number
 
-    vis_bandID : str
+    vis_band_id : str
         The VIS band number
 
     odir : str
@@ -261,8 +261,8 @@ def plot_correlations(
     ann = ax.annotate(s=ann_str, xy=(0.02, 0.76), xycoords="axes fraction", fontsize=10)
 
     # Add labels to figure
-    bnir_label = "B" + nir_bandID
-    bvis_label = "B" + vis_bandID
+    bnir_label = "B" + nir_band_id
+    bvis_label = "B" + vis_band_id
 
     xlabel = f"Reflectance ({bnir_label})"
     ylabel = f"Reflectance ({bvis_label})"
@@ -291,7 +291,7 @@ def plot_correlations(
     lgnd.remove()
 
 
-def extract_Percentiles(band, lowerPercentile, upperPercentile):
+def extract_percentiles(band, lower_percentile, upper_percentile):
     """
     This function extracts the values of the user specified lower and
     upper percentile of the data stored in the numpy 2D array. This
@@ -299,7 +299,7 @@ def extract_Percentiles(band, lowerPercentile, upperPercentile):
     very nice RGB images.
     """
     return np.percentile(
-        band.flatten(), (lowerPercentile, upperPercentile), interpolation="linear"
+        band.flatten(), (lower_percentile, upper_percentile), interpolation="linear"
     )
 
 
@@ -309,11 +309,11 @@ def linear_stretching(band, new_min, new_max):
     band using the new_min and new_max values. Note that in the
     altered image new_min = 0 and new_max = 1
     """
-    Grad = (0.0 - 1.0) / (float(new_min) - float(new_max))
-    return (band - new_min) * Grad
+    grad = (0.0 - 1.0) / (float(new_min) - float(new_max))
+    return (band - new_min) * grad
 
 
-def enhanced_RGB_stretch(refl_img, fmask, rgb_ix, nodata, lower_perc, upper_perc):
+def enhanced_rgb_stretch(refl_img, fmask, rgb_ix, nodata, lower_perc, upper_perc):
     """
     Parameters
     ----------
@@ -381,14 +381,14 @@ def enhanced_RGB_stretch(refl_img, fmask, rgb_ix, nodata, lower_perc, upper_perc
     scaled_rgb = np.zeros([dims[1], dims[2], 3], order="C", dtype=np.float32)
 
     # Find ocean, land/cloud and null pixels
-    water_pxlIx = np.where(
+    water_pxlix = np.where(
         (fmask == 5)
         & (refl_img[0, :, :] != nodata)
         & (refl_img[1, :, :] != nodata)
         & (refl_img[2, :, :] != nodata)
     )
 
-    other_pxlIx = np.where(
+    other_pxlix = np.where(
         (fmask >= 1)
         & (fmask <= 4)
         & (refl_img[0, :, :] != nodata)
@@ -399,38 +399,38 @@ def enhanced_RGB_stretch(refl_img, fmask, rgb_ix, nodata, lower_perc, upper_perc
     for i in range(0, 3):
 
         # extract the land and ocean pixels of this band
-        other_pixels = refl_img[rgb_ix[i], other_pxlIx[0], other_pxlIx[1]]
-        ocean_pixels = refl_img[rgb_ix[i], water_pxlIx[0], water_pxlIx[1]]
+        other_pixels = refl_img[rgb_ix[i], other_pxlix[0], other_pxlix[1]]
+        ocean_pixels = refl_img[rgb_ix[i], water_pxlix[0], water_pxlix[1]]
 
         # Scaling the land and ocean separately
         # to obtain the best RGB image.
-        other_lowerVal, other_upperVal = extract_Percentiles(other_pixels, 1.0, 99.0)
-        ocean_lowerVal, ocean_upperVal = extract_Percentiles(
+        other_lowerval, other_upperval = extract_percentiles(other_pixels, 1.0, 99.0)
+        ocean_lowerval, ocean_upperval = extract_percentiles(
             ocean_pixels, lower_perc, upper_perc
         )
 
         # Further constraining:
-        other_pixels[other_pixels < other_lowerVal] = other_lowerVal
-        other_pixels[other_pixels > other_upperVal] = other_upperVal
+        other_pixels[other_pixels < other_lowerval] = other_lowerval
+        other_pixels[other_pixels > other_upperval] = other_upperval
 
-        ocean_pixels[ocean_pixels < ocean_lowerVal] = ocean_lowerVal
-        ocean_pixels[ocean_pixels > ocean_upperVal] = ocean_upperVal
+        ocean_pixels[ocean_pixels < ocean_lowerval] = ocean_lowerval
+        ocean_pixels[ocean_pixels > ocean_upperval] = ocean_upperval
 
         # performing linear stretching using the lower
         # and upper percentiles for the ocean pixels
         # so that they range from 0 to 1
-        scaled_rgb[other_pxlIx[0], other_pxlIx[1], i] = linear_stretching(
-            other_pixels, other_lowerVal, other_upperVal
+        scaled_rgb[other_pxlix[0], other_pxlix[1], i] = linear_stretching(
+            other_pixels, other_lowerval, other_upperval
         )
 
-        scaled_rgb[water_pxlIx[0], water_pxlIx[1], i] = linear_stretching(
-            ocean_pixels, ocean_lowerVal, ocean_upperVal
+        scaled_rgb[water_pxlix[0], water_pxlix[1], i] = linear_stretching(
+            ocean_pixels, ocean_lowerval, ocean_upperval
         )
 
     return scaled_rgb
 
 
-def seadas_style_RGB(refl_img, rgb_ix, scale_factor):
+def seadas_style_rgb(refl_img, rgb_ix, scale_factor):
     """
     Create a (NASA-OBPG) SeaDAS style RGB. A very simple transformation
     of reflectances is used to create very impressive RGB's
@@ -463,7 +463,7 @@ def seadas_style_RGB(refl_img, rgb_ix, scale_factor):
     if len(rgb_ix) != 3:
         raise Exception("\nERROR: rgb_ix must only have three elements\n")
 
-    nBands, nRows, nCols = refl_img.shape
+    nbands, nrows, ncols = refl_img.shape
 
     # specify coefficient used in transformation:
     c1 = 0.091935692
@@ -471,7 +471,7 @@ def seadas_style_RGB(refl_img, rgb_ix, scale_factor):
     c3 = 10.0
     c4 = -0.015
 
-    scaled_rgb = np.zeros([nRows, nCols, 3], order="C", dtype=np.uint8)
+    scaled_rgb = np.zeros([nrows, ncols, 3], order="C", dtype=np.uint8)
 
     for i in range(0, 3):
         tmp_im = c1 + c2 * np.arctan(
