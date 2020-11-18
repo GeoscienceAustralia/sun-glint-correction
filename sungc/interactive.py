@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 """
 
 
-class ROI_Selector(object):
+class RoiSelector(object):
     """
     An interactive polygon editor.
 
