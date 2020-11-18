@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 
 import os
-import pathlib
+import yaml
 import rasterio
 import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy import stats
+from pathlib import Path
 from datetime import datetime
 from os.path import join as pjoin
+from typing import Optional, Union
+from datacube.model import Dataset
 from rasterio.warp import Resampling
 
 import sungc.rasterio_funcs as rio_funcs
-from sungc.interactive import ROI_Selector
+from sungc.interactive import RoiSelector
 from sungc.cox_munk_funcs import cm_sunglint
-from sungc.visualise import seadas_style_RGB, plot_correlations, display_image
+from sungc.visualise import seadas_style_rgb, plot_correlations, display_image
 
 SUPPORTED_SENSORS = [
     "sentinel_2a",
@@ -27,14 +30,19 @@ SUPPORTED_SENSORS = [
 
 
 class GlintCorr:
-    def __init__(self, dc_dataset, product, fmask_file=None):
+    def __init__(
+        self,
+        dc_dataset: Union[Dataset, Path],
+        product: str,
+        fmask_file: Optional[Path] = None,
+    ):
         """
         Initiate the sunglint correction class
 
         Parameters
         ----------
-        dc_dataset : datacube.model.Dataset
-            Datacube dataset object
+        dc_dataset : datacube.model.Dataset or Path
+            Datacube dataset object or *_final.odc-metadata.yaml Path
 
         product : str
             Product name
@@ -43,12 +51,26 @@ class GlintCorr:
         --------
         """
 
-        self.product = product
-        self.group_path = dc_dataset.local_path.parent
+        # __init__ uses the metadata dictionary stored in:
+        # 1. dc_dataset.metadata_doc, or;
+        # 2. *_final.odc-metadata.yaml
+        if isinstance(dc_dataset, Dataset):
+            metadata_dict = dc_dataset.metadata_doc
+            self.group_path = dc_dataset.local_path.parent
 
-        self.meas_dict = self.get_meas_dict(dc_dataset)
-        self.sensor = self.get_sensor(dc_dataset)
-        self.overpass_datetime = self.get_overpass_datetime(dc_dataset)
+        elif isinstance(dc_dataset, Path):
+            metadata_dict = self.load_yaml(dc_dataset)
+            self.group_path = dc_dataset.parent
+
+        else:
+            raise ValueError(
+                "dc_dataset must be a datacube.model.Dataset or pathlib.Path object"
+            )
+
+        self.product = product
+        self.meas_dict = self.get_meas_dict(metadata_dict)
+        self.sensor = self.get_sensor(metadata_dict)
+        self.overpass_datetime = self.get_overpass_datetime(metadata_dict)
 
         # check paths
         self.check_path_exists(self.group_path)
@@ -60,31 +82,35 @@ class GlintCorr:
         self.scale_factor = 10000.0
 
         # get list of tif files from self.meas_dict
-        self.bandList, self.band_ids, self.bandNames = self.get_band_list()
+        self.band_list, self.band_ids, self.bandnames = self.get_band_list()
 
         # get a useful output basename
-        # that a user may want to use
-        self.useful_obase = self.output_basename(self.bandList[0])
+        self.useful_obase = self.output_basename(self.band_list[0])
 
         # get a useful deep-water ROI shapefil
         self.obase_shp = self.useful_obase + "_deepWater_ROI.shp"
 
         if fmask_file:
-            self.fmask_file = pathlib.PosixPath(fmask_file)
+            self.fmask_file = Path(fmask_file)
         else:
             # get fmask from self.meas_dict
             self.fmask_file = self.get_fmask_file()
 
         self.check_path_exists(self.fmask_file)
 
+    def load_yaml(self, p: Path):
+        with p.open() as f:
+            contents = yaml.load(f, Loader=yaml.FullLoader)
+        return contents
+
     def output_basename(self, filename):
         """ Get a useful output basename """
         return filename.stem.split("_final")[0]
 
-    def deglint_ofile(self, spatialRes, out_dir, visible_bfile):
+    def deglint_ofile(self, spatial_res, out_dir, visible_bfile):
         """ Get deglint filename """
         vis_bname = os.path.basename(os.path.splitext(visible_bfile)[0])
-        return pjoin(out_dir, "{0}-deglint-{1}m.tif".format(vis_bname, spatialRes))
+        return pjoin(out_dir, "{0}-deglint-{1}m.tif".format(vis_bname, spatial_res))
 
     def check_sensor(self):
         if self.sensor not in SUPPORTED_SENSORS:
@@ -96,29 +122,29 @@ class GlintCorr:
         if not path.exists():
             raise Exception("\nError: {0} does not exist.".format(path))
 
-    def check_bandNum_exist(self, bandNums, required_bandNums):
+    def check_bandnum_exist(self, bandnums, required_bandnums):
         """
         Checks if the band numbers in the required list exist
 
         Parameters
         ----------
-        bandNums : list
+        bandnums : list
             A list of band numbers
 
-        required_bandNums : list
+        required_bandnums : list
             A list of required band numbers
 
         Raises
         ------
         Exception
             if any required band numbers are missing
-            from bandNums
+            from bandnums
         """
-        for req_bn in required_bandNums:
-            if not (req_bn in bandNums):
+        for req_bn in required_bandnums:
+            if not (req_bn in bandnums):
                 raise Exception(
                     "B{0} is missing from bands [{1}]".format(
-                        req_bn, ", ".join(["B" + str(i) for i in bandNums])
+                        req_bn, ", ".join(["B" + str(i) for i in bandnums])
                     )
                 )
 
@@ -152,68 +178,68 @@ class GlintCorr:
 
         return filename
 
-    def get_meas_dict(self, dc_dataset):
+    def get_meas_dict(self, metadata_dict):
         """
         Get the measurement dictionary from the datacube dataset.
 
         Parameters
         ----------
-        dc_dataset : datacube.model.Dataset
-            Datacube dataset object
+        metadata_dict : dict
+            metadata dictionary
 
         Returns
         -------
         meas_dict : dict
             A dictionary containing band information
         """
-        if "image" in dc_dataset.metadata_doc:
+        if "image" in metadata_dict:
             # older version
-            meas_dict = dc_dataset.metadata_doc["image"]["bands"]
-        elif "measurements" in dc_dataset.metadata_doc:
+            meas_dict = metadata_dict["image"]["bands"]
+        elif "measurements" in metadata_dict:
             # newer version
-            meas_dict = dc_dataset.metadata_doc["measurements"]
+            meas_dict = metadata_dict["measurements"]
         else:
             raise Exception(
-                "neither image nor measurements keys were found in metadata_doc"
+                "neither image nor measurements keys were found in metadata_dict"
             )
 
         return meas_dict
 
-    def get_sensor(self, dc_dataset):
+    def get_sensor(self, metadata_dict):
         """
         Get the sensor from the datacibe dataset
 
         Parameters
         ----------
-        dc_dataset : datacube.model.Dataset
-            Datacube dataset object
+        metadata_dict : dict
+            metadata dictionary
 
         Returns
         -------
         sensor : str
             The sensor name
         """
-        if "platform" in dc_dataset.metadata_doc:
+        if "platform" in metadata_dict:
             # older version
-            sensor = dc_dataset.metadata_doc["platform"]["code"].lower()
-        elif "properties" in dc_dataset.metadata_doc:
+            sensor = metadata_dict["platform"]["code"].lower()
+        elif "properties" in metadata_dict:
             # newer version
-            sensor = dc_dataset.metadata_doc["properties"]["eo:platform"].lower()
+            sensor = metadata_dict["properties"]["eo:platform"].lower()
         else:
             raise Exception(
-                "neither platform nor properties keys were found in metadata_doc"
+                "neither platform nor properties keys were found in metadata_dict"
             )
 
         return sensor
 
-    def get_overpass_datetime(self, dc_dataset):
+    def get_overpass_datetime(self, metadata_dict):
         """
         Get the overpass datetime from the datacibe dataset
 
         Parameters
         ----------
-        dc_dataset : datacube.model.Dataset
-            Datacube dataset object
+        metadata_dict : dict
+            metadata dictionary
 
         Returns
         -------
@@ -221,20 +247,23 @@ class GlintCorr:
             YYYY-MM-DD HH:MM:SS.SSSSSS
         """
         overpass_datetime = None
-        if "extent" in dc_dataset.metadata_doc:
+        if "extent" in metadata_dict:
             # new and old metadata have "extent" key
-            if "center_dt" in dc_dataset.metadata_doc["extent"]:
+            if "center_dt" in metadata_dict["extent"]:
                 # older version
                 overpass_datetime = datetime.strptime(
-                    dc_dataset.metadata_doc["extent"]["center_dt"],
+                    metadata_dict["extent"]["center_dt"],
                     "%Y-%m-%dT%H:%M:%S.%fZ",
                 )
 
-        if "properties" in dc_dataset.metadata_doc:
-            # newer version
-            overpass_datetime = datetime.strptime(
-                dc_dataset.metadata_doc["properties"]["datetime"], "%Y-%m-%d %H:%M:%S.%fZ"
-            )
+        if "properties" in metadata_dict:
+            # newer version - assume a datetime object
+            overpass_datetime = metadata_dict["properties"]["datetime"]
+
+            if isinstance(overpass_datetime, str):
+                overpass_datetime = datetime.strptime(
+                    metadata_dict["properties"]["datetime"], "%Y-%m-%d %H:%M:%S.%fZ"
+                )
 
         if not overpass_datetime:
             raise Exception(
@@ -249,18 +278,18 @@ class GlintCorr:
 
         Returns
         -------
-        bandList : list
+        bandlist : list
             A list of pathlib
 
-        bandNums : list of strings
+        bandnums : list of strings
             A list of band numbers
 
-        bandNames : list of string
+        bandnames : list of string
             A list of band names
         """
-        bandList = []
-        bandNums = []
-        bandNames = []
+        bandlist = []
+        bandnums = []
+        bandnames = []
         for key in self.meas_dict.keys():
             key_spl = key.split("_")
             if key_spl[0].find(self.product) != -1:
@@ -272,14 +301,14 @@ class GlintCorr:
 
                 bnum = os.path.splitext(basename)[0][-2:].strip("0")
 
-                bandNames.append("_".join(key_spl[1:]))
-                bandNums.append(bnum)
-                bandList.append(self.group_path.joinpath(basename))
+                bandnames.append("_".join(key_spl[1:]))
+                bandnums.append(bnum)
+                bandlist.append(self.group_path.joinpath(basename))
 
-        if not bandList:
+        if not bandlist:
             raise Exception("Could not find any geotifs in '{0}'".format(self.group_path))
 
-        return bandList, bandNums, bandNames
+        return bandlist, bandnums, bandnames
 
     def get_fmask_file(self):
         """
@@ -303,7 +332,7 @@ class GlintCorr:
 
         return fmask_file
 
-    def quicklook_RGB(self, dwnscale_factor=3):
+    def quicklook_rgb(self, dwnscale_factor=3):
         """
         Generate a quicklook from the sensor's RGB bands
 
@@ -359,19 +388,19 @@ class GlintCorr:
             ix_grn = self.band_ids.index("3")
             ix_blu = self.band_ids.index("2")
 
-        rgb_bandList = [
-            self.bandList[ix_red],
-            self.bandList[ix_grn],
-            self.bandList[ix_blu],
+        rgb_bandlist = [
+            self.band_list[ix_red],
+            self.band_list[ix_grn],
+            self.band_list[ix_blu],
         ]
-        with rasterio.open(rgb_bandList[0], "r") as ds:
-            ql_spatialRes = dwnscale_factor * float(ds.transform.a)
+        with rasterio.open(rgb_bandlist[0], "r") as ds:
+            ql_spatial_res = dwnscale_factor * float(ds.transform.a)
 
         if dwnscale_factor > 1:
             # resample to quicklook spatial resolution
             resmpl_tifs, refl_im, rio_meta = rio_funcs.resample_bands(
-                rgb_bandList,
-                ql_spatialRes,
+                rgb_bandlist,
+                ql_spatial_res,
                 Resampling.nearest,
                 load=True,
                 save=False,
@@ -379,12 +408,12 @@ class GlintCorr:
             )
         else:
             refl_im, rio_meta = rio_funcs.load_bands(
-                rgb_bandList, self.scale_factor, False
+                rgb_bandlist, self.scale_factor, False
             )
 
         # use NASA-OBPG SeaDAS's transformation to create
         # a very pretty RGB
-        rgb_im = seadas_style_RGB(
+        rgb_im = seadas_style_rgb(
             refl_img=refl_im, rgb_ix=[0, 1, 2], scale_factor=self.scale_factor
         )
 
@@ -420,21 +449,21 @@ class GlintCorr:
         """
 
         # generate a quicklook at 20 m spatial resolution
-        rgb_im, rgb_meta = self.quicklook_RGB(dwnscaling_factor)
+        rgb_im, rgb_meta = self.quicklook_rgb(dwnscaling_factor)
 
         # let the user select a ROI from the 10m RGB
         ax = display_image(rgb_im, None)
-        mc = ROI_Selector(ax=ax)
+        mc = RoiSelector(ax=ax)
         mc.interative()
         plt.show()
 
         # write a shapefile
         mc.verts_to_shp(metadata=rgb_meta, shp_file=shp_file)
 
-        # close the ROI_Selector
+        # close the RoiSelector
         mc = None
 
-    def nir_subtraction(self, vis_band_ids, nir_band_id, odir=None, waterVal=5):
+    def nir_subtraction(self, vis_band_ids, nir_band_id, odir=None, water_val=5):
         """
         This sunglint correction assumes that glint reflectance
         is nearly spectrally flat in the VIS-NIR. Hence, the NIR
@@ -459,14 +488,14 @@ class GlintCorr:
             The path where the deglinted geotiff bands are saved.
 
             if None then:
-            odir = pjoin(self.group_path, "DEGLINT", "GAO")
+            odir = pjoin(self.group_path, "DEGLINT", "MINUS_NIR")
 
-        waterVal : int
+        water_val : int
             The fmask value for water pixels (default = 5)
 
         Returns
         -------
-        deglint_BandList : list
+        deglint_bandlist : list
             A list of paths to the deglinted geotiff bands
 
         Notes
@@ -482,52 +511,52 @@ class GlintCorr:
         """
         # create output directory
         if not odir:
-            odir = pjoin(self.group_path, "DEGLINT", "GAO")
+            odir = pjoin(self.group_path, "DEGLINT", "MINUS_NIR")
 
         if not os.path.exists(odir):
             os.makedirs(odir, exist_ok=True)
 
         # Check that the input vis bands exist
-        self.check_bandNum_exist(self.band_ids, vis_band_ids)
-        self.check_bandNum_exist(self.band_ids, [nir_band_id])
+        self.check_bandnum_exist(self.band_ids, vis_band_ids)
+        self.check_bandnum_exist(self.band_ids, [nir_band_id])
 
         ix_nir = self.band_ids.index(nir_band_id)
-        nir_bandPath = str(self.bandList[ix_nir])
+        nir_bandpath = str(self.band_list[ix_nir])
 
         # ------------------------------ #
         #       load the NIR band        #
         # ------------------------------ #
-        with rasterio.open(nir_bandPath, "r") as nir_ds:
-            nir_nRows = nir_ds.height
-            nir_nCols = nir_ds.width
+        with rasterio.open(nir_bandpath, "r") as nir_ds:
+            nir_nrows = nir_ds.height
+            nir_ncols = nir_ds.width
             nir_im = nir_ds.read(1)
 
         # ------------------------------ #
-        nBands = len(vis_band_ids)
-        deglint_BandList = []
+        nbands = len(vis_band_ids)
+        deglint_bandlist = []
 
         # Iterate over each visible band
-        for z in range(0, nBands):
+        for z in range(0, nbands):
 
             ix_vis = self.band_ids.index(vis_band_ids[z])
-            vis_bandPath = str(self.bandList[ix_vis])
+            vis_bandpath = str(self.band_list[ix_vis])
 
             # ------------------------------ #
             #        load visible band       #
             # ------------------------------ #
-            with rasterio.open(vis_bandPath, "r") as dsVIS:
-                vis_im = dsVIS.read(1)
+            with rasterio.open(vis_bandpath, "r") as ds_vis:
+                vis_im = ds_vis.read(1)
 
                 # get metadata and load NIR array
-                kwargs = dsVIS.meta.copy()
+                kwargs = ds_vis.meta.copy()
                 nodata = kwargs["nodata"]
-                spatialRes = int(abs(kwargs["transform"].a))
+                spatial_res = int(abs(kwargs["transform"].a))
 
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
                 # ------------------------------ #
                 fmask = rio_funcs.resample_file_to_ds(
-                    self.fmask_file, dsVIS, Resampling.mode
+                    self.fmask_file, ds_vis, Resampling.mode
                 )
 
                 # ------------------------------ #
@@ -537,49 +566,49 @@ class GlintCorr:
                 # ------------------------------ #
                 deglint_band = np.array(vis_im, order="K", copy=True)
 
-                if (nir_nRows != dsVIS.height) or (nir_nCols != dsVIS.width):
+                if (nir_nrows != ds_vis.height) or (nir_ncols != ds_vis.width):
                     # resample the NIR band to match the VIS band
                     nir_im_res = rio_funcs.resample_file_to_ds(
-                        nir_bandPath, dsVIS, Resampling.bilinear
+                        nir_bandpath, ds_vis, Resampling.bilinear
                     )
 
-                    waterIx = np.where(
-                        (fmask == waterVal) & (vis_im != nodata) & (nir_im_res != nodata)
+                    water_ix = np.where(
+                        (fmask == water_val) & (vis_im != nodata) & (nir_im_res != nodata)
                     )
 
                     # 1. deglint water pixels
-                    deglint_band[waterIx] = vis_im[waterIx] - nir_im_res[waterIx]
+                    deglint_band[water_ix] = vis_im[water_ix] - nir_im_res[water_ix]
 
                     # Apply mask:
                     deglint_band[(vis_im == nodata) | (nir_im_res == nodata)] = nodata
 
                 else:
-                    waterIx = np.where(
-                        (fmask == waterVal) & (vis_im != nodata) & (nir_im != nodata)
+                    water_ix = np.where(
+                        (fmask == water_val) & (vis_im != nodata) & (nir_im != nodata)
                     )
 
-                    deglint_band[waterIx] = vis_im[waterIx] - nir_im[waterIx]
+                    deglint_band[water_ix] = vis_im[water_ix] - nir_im[water_ix]
                     deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
 
             # 2. write geotiff
-            deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
+            deglint_otif = self.deglint_ofile(spatial_res, odir, vis_bandpath)
             with rasterio.open(deglint_otif, "w", **kwargs) as dst:
                 dst.write(deglint_band, 1)
 
             if os.path.exists(deglint_otif):
-                deglint_BandList.append(deglint_otif)
+                deglint_bandlist.append(deglint_otif)
 
         # endfor z
-        return deglint_BandList
+        return deglint_bandlist
 
     def hedley_2005(
         self,
         vis_band_ids,
         nir_band_id,
         roi_shpfile=None,
-        overwrite_shp=None,
+        overwrite_shp=False,
         odir=None,
-        waterVal=5,
+        water_val=5,
         plot=False,
     ):
         """
@@ -614,7 +643,7 @@ class GlintCorr:
             if None then:
             odir = pjoin(self.group_path, "DEGLINT", "HEDLEY")
 
-        waterVal : int
+        water_val : int
             The fmask value for water pixels (default = 5)
 
         plot : bool (True | False)
@@ -622,7 +651,7 @@ class GlintCorr:
 
         Returns
         -------
-        deglint_BandList : list
+        deglint_bandlist : list
             A list of paths to the deglinted geotiff bands
 
         Notes
@@ -671,48 +700,48 @@ class GlintCorr:
             fig, ax = plt.subplots(nrows=1, ncols=1)
 
         # Check that the input vis bands exist
-        self.check_bandNum_exist(self.band_ids, vis_band_ids)
-        self.check_bandNum_exist(self.band_ids, [nir_band_id])
+        self.check_bandnum_exist(self.band_ids, vis_band_ids)
+        self.check_bandnum_exist(self.band_ids, [nir_band_id])
 
         ix_nir = self.band_ids.index(nir_band_id)
-        nir_bandPath = str(self.bandList[ix_nir])
+        nir_bandpath = str(self.band_list[ix_nir])
 
         # ------------------------------ #
         #       load the NIR band        #
         # ------------------------------ #
-        with rasterio.open(nir_bandPath, "r") as nir_ds:
-            nir_nRows = nir_ds.height
-            nir_nCols = nir_ds.width
+        with rasterio.open(nir_bandpath, "r") as nir_ds:
+            nir_nrows = nir_ds.height
+            nir_ncols = nir_ds.width
             nir_im_orig = nir_ds.read(1)
 
         # ------------------------------ #
-        nBands = len(vis_band_ids)
-        deglint_BandList = []
+        nbands = len(vis_band_ids)
+        deglint_bandlist = []
 
         # Iterate over each visible band
-        for z in range(0, nBands):
+        for z in range(0, nbands):
 
             ix_vis = self.band_ids.index(vis_band_ids[z])
-            vis_bandPath = str(self.bandList[ix_vis])
+            vis_bandpath = str(self.band_list[ix_vis])
 
             # ------------------------------ #
             #        load visible band       #
             # ------------------------------ #
-            with rasterio.open(vis_bandPath, "r") as dsVIS:
-                vis_im = dsVIS.read(1)
+            with rasterio.open(vis_bandpath, "r") as ds_vis:
+                vis_im = ds_vis.read(1)
 
                 # get metadata and load NIR array
-                kwargs = dsVIS.meta.copy()
+                kwargs = ds_vis.meta.copy()
                 nodata = kwargs["nodata"]
-                spatialRes = int(abs(kwargs["transform"].a))
+                spatial_res = int(abs(kwargs["transform"].a))
 
                 # ------------------------------ #
                 #       Resample NIR band        #
                 # ------------------------------ #
-                if (nir_nRows != dsVIS.height) or (nir_nCols != dsVIS.width):
+                if (nir_nrows != ds_vis.height) or (nir_ncols != ds_vis.width):
                     # resample the NIR band to match the VIS band
                     nir_im = rio_funcs.resample_file_to_ds(
-                        nir_bandPath, dsVIS, Resampling.bilinear
+                        nir_bandpath, ds_vis, Resampling.bilinear
                     )
 
                 else:
@@ -722,15 +751,15 @@ class GlintCorr:
                 #  Resample and load fmask_file  #
                 # ------------------------------ #
                 fmask = rio_funcs.resample_file_to_ds(
-                    self.fmask_file, dsVIS, Resampling.mode
+                    self.fmask_file, ds_vis, Resampling.mode
                 )
 
                 # ------------------------------ #
                 #    Load shapefile as a mask    #
                 # ------------------------------ #
-                roi_mask = rio_funcs.load_mask_from_shp(roi_shpfile, dsVIS)
+                roi_mask = rio_funcs.load_mask_from_shp(roi_shpfile, ds_vis)
 
-            flag_mask = (fmask != waterVal) | (vis_im == nodata) | (nir_im == nodata)
+            flag_mask = (fmask != water_val) | (vis_im == nodata) | (nir_im == nodata)
             water_mask = ~flag_mask
             roi_mask[flag_mask] = nodata
 
@@ -741,29 +770,29 @@ class GlintCorr:
             deglint_band = np.array(vis_im, order="K", copy=True)
 
             # 1. Find minimum NIR in the roi polygon
-            roi_valIx = np.where(roi_mask != nodata)
-            valid_NIR = nir_im[roi_valIx]
-            minRefl_NIR = valid_NIR.min()
+            roi_valix = np.where(roi_mask != nodata)
+            valid_nir = nir_im[roi_valix]
+            min_refl_nir = valid_nir.min()
 
             # 2. Get correlations between current band and NIR
-            y_vals = vis_im[roi_valIx]
+            y_vals = vis_im[roi_valix]
             slope, y_inter, r_val, p_val, std_err = stats.linregress(
-                x=valid_NIR, y=y_vals
+                x=valid_nir, y=y_vals
             )
 
             # 3. deglint water pixels
             deglint_band[water_mask] = vis_im[water_mask] - slope * (
-                nir_im[water_mask] - minRefl_NIR
+                nir_im[water_mask] - min_refl_nir
             )
             deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
 
             # 4. write geotiff
-            deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
+            deglint_otif = self.deglint_ofile(spatial_res, odir, vis_bandpath)
             with rasterio.open(deglint_otif, "w", **kwargs) as dst:
                 dst.write(deglint_band, 1)
 
             if os.path.exists(deglint_otif):
-                deglint_BandList.append(deglint_otif)
+                deglint_bandlist.append(deglint_otif)
 
             # ------------------------------ #
             #        Plot correlations       #
@@ -776,16 +805,16 @@ class GlintCorr:
                     r2=r_val ** 2,
                     slope=slope,
                     y_inter=y_inter,
-                    nir_vals=valid_NIR,
+                    nir_vals=valid_nir,
                     vis_vals=y_vals,
                     scale_factor=self.scale_factor,
-                    nir_bandID=nir_band_id,
-                    vis_bandID=vis_band_ids[z],
+                    nir_band_id=nir_band_id,
+                    vis_band_id=vis_band_ids[z],
                     odir=odir,
                 )
         # endfor z
 
-        return deglint_BandList
+        return deglint_bandlist
 
     def cox_munk(
         self,
@@ -795,7 +824,7 @@ class GlintCorr:
         szen_file=None,
         razi_file=None,
         wind_speed=5,
-        waterVal=5,
+        water_val=5,
     ):
         """
         Performs the wind-direction-independent Cox and Munk (1954)
@@ -849,12 +878,12 @@ class GlintCorr:
         wind_speed : float
             Wind speed (m/s)
 
-        waterVal : int
+        water_val : int
             The fmask value for water pixels (default = 5)
 
         Returns
         -------
-        deglint_BandList : list
+        deglint_bandlist : list
             A list of paths to the deglinted geotiff bands
 
         Raises
@@ -893,7 +922,7 @@ class GlintCorr:
             razi_file = self.find_file("relative_azimuth")
 
         # Check that the input vis bands exist
-        self.check_bandNum_exist(self.band_ids, vis_band_ids)
+        self.check_bandnum_exist(self.band_ids, vis_band_ids)
 
         # ------------------------------- #
         #  Estimate sunglint reflectance  #
@@ -908,7 +937,7 @@ class GlintCorr:
             return_fresnel=False,
         )
 
-        psg_nRows, psg_nCols = p_glint.shape
+        psg_nrows, psg_ncols = p_glint.shape
         # Notes:
         #    * if return_fresnel=True  then p_fresnel = numpy.ndarray
         #    * if return_fresnel=False then p_fresnel = None
@@ -921,39 +950,39 @@ class GlintCorr:
         p_glint *= self.scale_factor  # keep as np.float32
 
         # ------------------------------ #
-        nBands = len(vis_band_ids)
-        deglint_BandList = []
+        nbands = len(vis_band_ids)
+        deglint_bandlist = []
 
-        for z in range(0, nBands):
+        for z in range(0, nbands):
 
             ix_vis = self.band_ids.index(vis_band_ids[z])
-            vis_bandPath = self.bandList[ix_vis]
+            vis_bandpath = self.band_list[ix_vis]
 
             # ------------------------------ #
             #        load visible band       #
             # ------------------------------ #
-            with rasterio.open(vis_bandPath, "r") as dsVIS:
-                vis_im = dsVIS.read(1)
-                vis_nRows, vis_nCols = vis_im.shape
+            with rasterio.open(vis_bandpath, "r") as ds_vis:
+                vis_im = ds_vis.read(1)
+                vis_nrows, vis_ncols = vis_im.shape
 
                 # get metadata
-                kwargs = dsVIS.meta.copy()
+                kwargs = ds_vis.meta.copy()
                 nodata = kwargs["nodata"]
-                spatialRes = int(abs(kwargs["transform"].a))
+                spatial_res = int(abs(kwargs["transform"].a))
 
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
                 # ------------------------------ #
                 fmask = rio_funcs.resample_file_to_ds(
-                    self.fmask_file, dsVIS, Resampling.mode
+                    self.fmask_file, ds_vis, Resampling.mode
                 )
 
                 # ------------------------------ #
                 #        Resample p_glint        #
                 # ------------------------------ #
-                if (vis_nRows != psg_nRows) or (psg_nCols != vis_nCols):
+                if (vis_nrows != psg_nrows) or (psg_ncols != vis_ncols):
                     p_glint_res = rio_funcs.resample_band_to_ds(
-                        p_glint, cm_meta, dsVIS, Resampling.bilinear
+                        p_glint, cm_meta, ds_vis, Resampling.bilinear
                     )
 
                 else:
@@ -964,18 +993,18 @@ class GlintCorr:
             # ------------------------------ #
             # copy band
             deglint_band = np.array(vis_im, order="K", copy=True)
-            waterMSK = (fmask == waterVal) & (vis_im != nodata)
+            water_msk = (fmask == water_val) & (vis_im != nodata)
 
             # 1. deglint water pixels
-            deglint_band[waterMSK] = vis_im[waterMSK] - p_glint_res[waterMSK]
+            deglint_band[water_msk] = vis_im[water_msk] - p_glint_res[water_msk]
 
             # 2. write geotiff
-            deglint_otif = self.deglint_ofile(spatialRes, odir, vis_bandPath)
+            deglint_otif = self.deglint_ofile(spatial_res, odir, vis_bandpath)
             with rasterio.open(deglint_otif, "w", **kwargs) as dst:
                 dst.write(deglint_band, 1)
 
             if os.path.exists(deglint_otif):
-                deglint_BandList.append(deglint_otif)
+                deglint_bandlist.append(deglint_otif)
 
         # endfor z
-        return deglint_BandList
+        return deglint_bandlist
