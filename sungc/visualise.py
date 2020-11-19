@@ -318,10 +318,10 @@ def enhanced_rgb_stretch(refl_img, fmask, rgb_ix, nodata, lower_perc, upper_perc
     Parameters
     ----------
     refl_img : numpy.ndarray
-        reflectance image with dimensions of [nBands, nRows, nCols]
+        reflectance image with dimensions of [nbands, nrows, ncols]
 
     fmask : numpy.ndarray
-        Mask image with dimensions of [nRows, nCols]
+        Mask image with dimensions of [nrows, ncols]
         mask value, flag
         -999, nodata
            0, nodata
@@ -349,7 +349,7 @@ def enhanced_rgb_stretch(refl_img, fmask, rgb_ix, nodata, lower_perc, upper_perc
     -------
     scaled_rgb : numpy.ndarray
         Scaled and enhanced rgb image with dimensions of
-        [nRows, nCols, 3]. Here, the values in each band
+        [nrows, ncols, 3]. Here, the values in each band
         are scaled to range 0 to 1 required by
         matplotlib.pyplot.imshow
 
@@ -438,7 +438,7 @@ def seadas_style_rgb(refl_img, rgb_ix, scale_factor):
     Parameters
     ----------
     refl_img : numpy.ndarray
-        reflectance image with dimensions of [nBands, nRows, nCols]
+        reflectance image with dimensions of [nbands, nrows, ncols]
 
     rgb_ix : list or tuple
         reflectance image band indices of the red, green and blue
@@ -452,7 +452,7 @@ def seadas_style_rgb(refl_img, rgb_ix, scale_factor):
     -------
     scaled_rgb : numpy.ndarray [dtype = np.uint8]
         Scaled and enhanced rgb image with dimensions of
-        [nRows, nCols, 3].
+        [nrows, ncols, 3].
 
     Raises
     ------
