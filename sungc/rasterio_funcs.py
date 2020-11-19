@@ -70,7 +70,7 @@ def load_bands(band_list, scale_factor, apply_scaling):
     Returns
     -------
     spectral_cube : numpy.ndarray
-        multi-band array with dimensions of [nBands, nRows, nCols]
+        multi-band array with dimensions of [nbands, nrows, ncols]
     """
     nbands = len(band_list)
     spectral_cube = None
@@ -132,7 +132,7 @@ def resample_bands(
     load : bool
         if True
             The resampled bands are returned as a numpy.ndarray
-            having dimensions of [nRows, nCols] or [nBands, nRows, nCols]
+            having dimensions of [nrows, ncols] or [nbands, nrows, ncols]
 
         if False
             The resampled bands are not returned
@@ -258,7 +258,7 @@ def resample_bands(
     # end-for z
 
     if load:
-        # update nBands in metadata
+        # update nbands in metadata
         metad["count"] = nbands
 
         if nbands == 1:
