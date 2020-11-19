@@ -356,7 +356,7 @@ class GlintCorr:
         -------
         rgb_im : numpy.ndarray
             RGB image with the following dimensions
-            [nRows, nCols, 3] for the three channels
+            [nrows, ncols, 3] for the three channels
 
         rgb_meta : dict
             Metadata dictionary taken from rasterio
