@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 from scipy import stats
 from pathlib import Path
 from datetime import datetime
-from os.path import join as pjoin
 from typing import Optional, Union
 from datacube.model import Dataset
 from rasterio.warp import Resampling
@@ -32,7 +31,7 @@ SUPPORTED_SENSORS = [
 class GlintCorr:
     def __init__(
         self,
-        dc_dataset: Union[Dataset, Path],
+        dc_dataset: Union[Dataset, Path, str],
         product: str,
         fmask_file: Optional[Path] = None,
     ):
@@ -59,17 +58,24 @@ class GlintCorr:
             self.group_path = dc_dataset.local_path.parent
 
         elif isinstance(dc_dataset, Path):
+            # check if Path is a yaml... Exception if not
             metadata_dict = self.load_yaml(dc_dataset)
             self.group_path = dc_dataset.parent
 
+        elif isinstance(dc_dataset, str):
+            metadata_dict = self.load_yaml(Path(dc_dataset))
+            self.group_path = Path(dc_dataset).parent
+
         else:
             raise ValueError(
-                "dc_dataset must be a datacube.model.Dataset or pathlib.Path object"
+                "dc_dataset must be a datacube.model.Dataset, pathlib.Path object or str"
             )
 
         self.product = product
         self.meas_dict = self.get_meas_dict(metadata_dict)
         self.sensor = self.get_sensor(metadata_dict)
+
+        # self.overpass_datetime isn't used at the moment.
         self.overpass_datetime = self.get_overpass_datetime(metadata_dict)
 
         # check paths
@@ -99,30 +105,35 @@ class GlintCorr:
         self.check_path_exists(self.fmask_file)
 
     def load_yaml(self, p: Path):
+        if ".odc-metadata.yaml" not in p.name:
+            raise Exception(f"{p} is not a .odc-metadata.yaml")
+
         with p.open() as f:
             contents = yaml.load(f, Loader=yaml.FullLoader)
         return contents
 
-    def output_basename(self, filename):
+    def output_basename(self, filename: Path):
         """ Get a useful output basename """
         return filename.stem.split("_final")[0]
 
-    def deglint_ofile(self, spatial_res, out_dir, visible_bfile):
+    def deglint_ofile(
+        self, spatial_res: Union[float, int], out_dir: Path, visible_bfile: Path
+    ):
         """ Get deglint filename """
-        vis_bname = os.path.basename(os.path.splitext(visible_bfile)[0])
-        return pjoin(out_dir, "{0}-deglint-{1}m.tif".format(vis_bname, spatial_res))
+        vis_bname = visible_bfile.stem
+        return out_dir / "{0}-deglint-{1}m.tif".format(vis_bname, spatial_res)
 
     def check_sensor(self):
         if self.sensor not in SUPPORTED_SENSORS:
             msg = f"Supported sensors are: {SUPPORTED_SENSORS}, recieved {self.sensor}"
             raise Exception(msg)
 
-    def check_path_exists(self, path):
+    def check_path_exists(self, path: Path):
         """ Checks if a path exists """
         if not path.exists():
             raise Exception("\nError: {0} does not exist.".format(path))
 
-    def check_bandnum_exist(self, bandnums, required_bandnums):
+    def check_bandnum_exist(self, bandnums: list, required_bandnums: list):
         """
         Checks if the band numbers in the required list exist
 
@@ -194,7 +205,13 @@ class GlintCorr:
         """
         if "image" in metadata_dict:
             # older version
-            meas_dict = metadata_dict["image"]["bands"]
+            try:
+                meas_dict = metadata_dict["image"]["bands"]
+            except KeyError:
+                raise Exception(
+                    'unable to extract bands, "bands" not in metadata_dict["image"]'
+                )
+
         elif "measurements" in metadata_dict:
             # newer version
             meas_dict = metadata_dict["measurements"]
@@ -219,12 +236,23 @@ class GlintCorr:
         sensor : str
             The sensor name
         """
+        msg = "Unable to extract sensor name"
         if "platform" in metadata_dict:
             # older version
-            sensor = metadata_dict["platform"]["code"].lower()
+            try:
+                sensor = metadata_dict["platform"]["code"].lower()
+            except KeyError:
+                raise Exception(f'{msg}, "code" not in metadata_dict["platform"]')
+
         elif "properties" in metadata_dict:
             # newer version
-            sensor = metadata_dict["properties"]["eo:platform"].lower()
+            try:
+                sensor = metadata_dict["properties"]["eo:platform"].lower()
+            except KeyError:
+                raise Exception(
+                    f'{msg}, "eo:platform" not in metadata_dict["properties"]'
+                )
+
         else:
             raise Exception(
                 "neither platform nor properties keys were found in metadata_dict"
@@ -247,6 +275,7 @@ class GlintCorr:
             YYYY-MM-DD HH:MM:SS.SSSSSS
         """
         overpass_datetime = None
+        msg = "Unable to extract overpass datetime"
         if "extent" in metadata_dict:
             # new and old metadata have "extent" key
             if "center_dt" in metadata_dict["extent"]:
@@ -255,20 +284,26 @@ class GlintCorr:
                     metadata_dict["extent"]["center_dt"],
                     "%Y-%m-%dT%H:%M:%S.%fZ",
                 )
+            else:
+                msg += ', "center_dt" not in metadata_dict["extent"]'
 
         if "properties" in metadata_dict:
             # newer version - assume a datetime object
-            overpass_datetime = metadata_dict["properties"]["datetime"]
+            if "datetime" in metadata_dict["properties"]:
+                overpass_datetime = metadata_dict["properties"]["datetime"]
 
-            if isinstance(overpass_datetime, str):
-                overpass_datetime = datetime.strptime(
-                    metadata_dict["properties"]["datetime"], "%Y-%m-%d %H:%M:%S.%fZ"
-                )
+                if isinstance(overpass_datetime, str):
+                    overpass_datetime = datetime.strptime(
+                        metadata_dict["properties"]["datetime"], "%Y-%m-%d %H:%M:%S.%fZ"
+                    )
+            else:
+                msg += ', "datetime" not in metadata_dict["properties"]'
 
         if not overpass_datetime:
-            raise Exception(
-                "neither extent nor properties keys were found in metadata_doc"
-            )
+            if msg == "Unable to extract overpass datetime":
+                msg += '"extent" or "properties" not in metadata_dict'
+
+            raise Exception(f"{msg}")
 
         return overpass_datetime
 
@@ -286,7 +321,24 @@ class GlintCorr:
 
         bandnames : list of string
             A list of band names
+
+        Raises:
+            Exception if any of the bands do not exist
         """
+        # a list of bands that are not needed for deglinting
+        skip_bands = [
+            "contiguity",
+            "azimuthal_exiting",
+            "azimuthal-incident",
+            "combined-terrain-shadow",
+            "relative-slope",
+            "satellite-azimuth",
+            "solar-azimuth",
+            "time-delta",
+            "exiting-angle",
+            "incident-angle",
+        ]
+
         bandlist = []
         bandnums = []
         bandnames = []
@@ -294,16 +346,21 @@ class GlintCorr:
             key_spl = key.split("_")
             if key_spl[0].find(self.product) != -1:
                 basename = self.meas_dict[key]["path"]
-                if basename.lower().find("contiguity") != -1:
-                    # skip over files such as:
-                    # S2A_OPER_MSI_ARD_TL_EPAE_{blah}.07_NBART_CONTIGUITY.TIF
+
+                # skip over files that aren't needed for deglinting
+                if basename.lower() in skip_bands:
                     continue
+
+                bfile = self.group_path.joinpath(basename)
+
+                # ensure that bfile exists, raise exception if not
+                self.check_path_exists(bfile)
 
                 bnum = os.path.splitext(basename)[0][-2:].strip("0")
 
                 bandnames.append("_".join(key_spl[1:]))
                 bandnums.append(bnum)
-                bandlist.append(self.group_path.joinpath(basename))
+                bandlist.append(bfile)
 
         if not bandlist:
             raise Exception("Could not find any geotifs in '{0}'".format(self.group_path))
@@ -323,16 +380,25 @@ class GlintCorr:
         ------
         Exception if fmask file is not found
         """
+        msg = "Unable to extract fmask"
         if "fmask" in self.meas_dict:
-            fmask_file = self.group_path.joinpath(self.meas_dict["fmask"]["path"])
+            if "path" in self.meas_dict["fmask"]:
+                fmask_file = self.group_path.joinpath(self.meas_dict["fmask"]["path"])
+            else:
+                raise Exception(f'{msg}, "path" not in self.meas_dict["fmask"]')
+
         elif "oa_fmask" in self.meas_dict:
-            fmask_file = self.group_path.joinpath(self.meas_dict["oa_fmask"]["path"])
+            if "path" in self.meas_dict["oa_fmask"]:
+                fmask_file = self.group_path.joinpath(self.meas_dict["oa_fmask"]["path"])
+            else:
+                raise Exception(f'{msg}, "path" not in self.meas_dict["oa_fmask"]')
+
         else:
-            raise Exception("\nCould not find the fmask file")
+            raise Exception(f'{msg}, "fmask" or "oa_fmask" not in self.meas_dict')
 
         return fmask_file
 
-    def quicklook_rgb(self, dwnscale_factor=3):
+    def quicklook_rgb(self, dwnscale_factor: float = 3):
         """
         Generate a quicklook from the sensor's RGB bands
 
@@ -417,6 +483,11 @@ class GlintCorr:
             refl_img=refl_im, rgb_ix=[0, 1, 2], scale_factor=self.scale_factor
         )
 
+        rio_meta["band_1"] = rgb_bandlist[0].stem
+        rio_meta["band_2"] = rgb_bandlist[1].stem
+        rio_meta["band_3"] = rgb_bandlist[2].stem
+        rio_meta["dtype"] = rgb_im.dtype.__str__()  # this should np.unit8
+
         return rgb_im, rio_meta
 
     def create_roi_shp(self, shp_file, dwnscaling_factor=3):
@@ -446,12 +517,13 @@ class GlintCorr:
             e.g. if dwnscale_factor = 3, then the 10 m RGB bands
             will be downscaled to 30 m spatial resolution
 
+        Rasies:
+            Exception if dwnscaling_factor < 1
         """
-
-        # generate a quicklook at 20 m spatial resolution
+        # generate a downscaled quicklook
         rgb_im, rgb_meta = self.quicklook_rgb(dwnscaling_factor)
 
-        # let the user select a ROI from the 10m RGB
+        # let the user select a ROI from the quicklook RGB
         ax = display_image(rgb_im, None)
         mc = RoiSelector(ax=ax)
         mc.interative()
@@ -488,7 +560,7 @@ class GlintCorr:
             The path where the deglinted geotiff bands are saved.
 
             if None then:
-            odir = pjoin(self.group_path, "DEGLINT", "MINUS_NIR")
+            odir = self.group_path / "DEGLINT" / "MINUS_NIR"
 
         water_val : int
             The fmask value for water pixels (default = 5)
@@ -508,20 +580,21 @@ class GlintCorr:
         ------
         Exception
             * If any of the bands do not exist
+            * If any of the input data only contains nodata
         """
         # create output directory
         if not odir:
-            odir = pjoin(self.group_path, "DEGLINT", "MINUS_NIR")
+            odir = self.group_path / "DEGLINT" / "MINUS_NIR"
 
-        if not os.path.exists(odir):
-            os.makedirs(odir, exist_ok=True)
+        if not odir.exists:
+            odir.mkdir(exist_ok=True)
 
         # Check that the input vis bands exist
         self.check_bandnum_exist(self.band_ids, vis_band_ids)
         self.check_bandnum_exist(self.band_ids, [nir_band_id])
 
         ix_nir = self.band_ids.index(nir_band_id)
-        nir_bandpath = str(self.band_list[ix_nir])
+        nir_bandpath = self.band_list[ix_nir]  # Path
 
         # ------------------------------ #
         #       load the NIR band        #
@@ -531,6 +604,8 @@ class GlintCorr:
             nir_ncols = nir_ds.width
             nir_im = nir_ds.read(1)
 
+            rio_funcs.check_image_singleval(nir_im, int(nir_ds.meta["nodata"]), "nir_im")
+
         # ------------------------------ #
         nbands = len(vis_band_ids)
         deglint_bandlist = []
@@ -539,7 +614,7 @@ class GlintCorr:
         for z in range(0, nbands):
 
             ix_vis = self.band_ids.index(vis_band_ids[z])
-            vis_bandpath = str(self.band_list[ix_vis])
+            vis_bandpath = self.band_list[ix_vis]  # Path
 
             # ------------------------------ #
             #        load visible band       #
@@ -550,6 +625,9 @@ class GlintCorr:
                 # get metadata and load NIR array
                 kwargs = ds_vis.meta.copy()
                 nodata = kwargs["nodata"]
+
+                rio_funcs.check_image_singleval(vis_im, int(nodata), "vis_im")
+
                 spatial_res = int(abs(kwargs["transform"].a))
 
                 # ------------------------------ #
@@ -595,7 +673,7 @@ class GlintCorr:
             with rasterio.open(deglint_otif, "w", **kwargs) as dst:
                 dst.write(deglint_band, 1)
 
-            if os.path.exists(deglint_otif):
+            if deglint_otif.exists():
                 deglint_bandlist.append(deglint_otif)
 
         # endfor z
@@ -641,7 +719,7 @@ class GlintCorr:
             and correlation plots (if specified) are saved.
 
             if None then:
-            odir = pjoin(self.group_path, "DEGLINT", "HEDLEY")
+            odir = self.group_path / "DEGLINT" / "HEDLEY"
 
         water_val : int
             The fmask value for water pixels (default = 5)
@@ -678,9 +756,9 @@ class GlintCorr:
         # get name of the sunglint contaminated
         # deep water region polygon ascii file
         if not roi_shpfile:
-            roi_shpfile = pjoin(self.group_path, "deepWater_ROI_polygon.shp")
+            roi_shpfile = self.group_path / "deepWater_ROI_polygon.shp"
 
-        if not os.path.exists(roi_shpfile):
+        if not roi_shpfile.exists():
             # use interactive mode to generate the shapefile
             self.create_roi_shp(roi_shpfile)
         else:
@@ -690,10 +768,10 @@ class GlintCorr:
 
         # create output directory
         if not odir:
-            odir = pjoin(self.group_path, "DEGLINT", "HEDLEY")
+            odir = self.group_path / "DEGLINT" / "HEDLEY"
 
-        if not os.path.exists(odir):
-            os.makedirs(odir, exist_ok=True)
+        if not odir.exists():
+            odir.mkdir(exist_ok=True)
 
         # initiate plot if specified
         if plot:
@@ -704,7 +782,7 @@ class GlintCorr:
         self.check_bandnum_exist(self.band_ids, [nir_band_id])
 
         ix_nir = self.band_ids.index(nir_band_id)
-        nir_bandpath = str(self.band_list[ix_nir])
+        nir_bandpath = self.band_list[ix_nir]  # Path
 
         # ------------------------------ #
         #       load the NIR band        #
@@ -714,6 +792,10 @@ class GlintCorr:
             nir_ncols = nir_ds.width
             nir_im_orig = nir_ds.read(1)
 
+            rio_funcs.check_image_singleval(
+                nir_im_orig, int(nir_ds.nodata), "nir_im_orig"
+            )
+
         # ------------------------------ #
         nbands = len(vis_band_ids)
         deglint_bandlist = []
@@ -722,7 +804,7 @@ class GlintCorr:
         for z in range(0, nbands):
 
             ix_vis = self.band_ids.index(vis_band_ids[z])
-            vis_bandpath = str(self.band_list[ix_vis])
+            vis_bandpath = self.band_list[ix_vis]  # Path
 
             # ------------------------------ #
             #        load visible band       #
@@ -734,6 +816,8 @@ class GlintCorr:
                 kwargs = ds_vis.meta.copy()
                 nodata = kwargs["nodata"]
                 spatial_res = int(abs(kwargs["transform"].a))
+
+                rio_funcs.check_image_singleval(vis_im, int(nodata), "vis_im")
 
                 # ------------------------------ #
                 #       Resample NIR band        #
@@ -791,7 +875,7 @@ class GlintCorr:
             with rasterio.open(deglint_otif, "w", **kwargs) as dst:
                 dst.write(deglint_band, 1)
 
-            if os.path.exists(deglint_otif):
+            if deglint_otif.exists():
                 deglint_bandlist.append(deglint_otif)
 
             # ------------------------------ #
@@ -818,13 +902,13 @@ class GlintCorr:
 
     def cox_munk(
         self,
-        vis_band_ids,
-        odir=None,
-        vzen_file=None,
-        szen_file=None,
-        razi_file=None,
-        wind_speed=5,
-        water_val=5,
+        vis_band_ids: list,
+        odir: Union[Path, None] = None,
+        vzen_file: Union[Path, None] = None,
+        szen_file: Union[Path, None] = None,
+        razi_file: Union[Path, None] = None,
+        wind_speed: float = 5,
+        water_val: int = 5,
     ):
         """
         Performs the wind-direction-independent Cox and Munk (1954)
@@ -850,25 +934,25 @@ class GlintCorr:
         vis_band_ids : list
             A list of band numbers in the visible that will be deglinted
 
-        odir : str or None
+        odir : Path or None
             The path where the deglinted geotiff bands are saved.
 
             if None then:
-            odir = pjoin(self.group_path, "DEGLINT", "COX_MUNK")
+            odir = self.group_path / "DEGLINT" / "COX_MUNK"
 
-        vzen_file : str or None
+        vzen_file : Path or None
             sensor view zenith (rasterio-openable) image file
 
             * if None then the file containing "satellite-view.tif"
               inside group_path is designated as the vzen_file
 
-        szen_file : str or None
+        szen_file : Path or None
             solar zenith (rasterio-openable) image file
 
             * if None then the file containing "solar-zenith.tif"
               inside group_path is designated as the szen_file
 
-        razi_file : str or None
+        razi_file : Path or None
             Relative azimuth (rasterio-openable) image file
             Relative azimuth = solar_azimuth - sensor_azimuth
 
@@ -890,14 +974,15 @@ class GlintCorr:
         ------
         Exception:
             * if input arrays are not two-dimensional
+            * if any input arrays only contain nodata
             * if dimension mismatch
             * if wind_speed < 0
         """
         # create output directory
         if not odir:
-            odir = pjoin(self.group_path, "DEGLINT", "COX_MUNK")
+            odir = self.group_path / "DEGLINT" / "COX_MUNK"
 
-        if not os.path.exists(odir):
+        if not odir.exists():
             os.makedirs(odir, exist_ok=True)
 
         # --- check vzen_file --- #
@@ -936,6 +1021,10 @@ class GlintCorr:
             wind_speed=wind_speed,
             return_fresnel=False,
         )
+        # although the fresnel reflectance (p_fresnel) is not used,
+        # it is useful to keep for testing/debugging
+
+        p_nodata = cm_meta["nodata"]  # this is np.nan
 
         psg_nrows, psg_ncols = p_glint.shape
         # Notes:
@@ -947,7 +1036,7 @@ class GlintCorr:
         # In this implementation, the scale_factor (usually 10,000)
         # will not be applied to minimise storage of deglinted
         # bands. Hence, we need to multiply p_glint by this factor
-        p_glint *= self.scale_factor  # keep as np.float32
+        p_glint[p_glint != p_nodata] *= self.scale_factor  # keep as np.float32
 
         # ------------------------------ #
         nbands = len(vis_band_ids)
@@ -956,7 +1045,7 @@ class GlintCorr:
         for z in range(0, nbands):
 
             ix_vis = self.band_ids.index(vis_band_ids[z])
-            vis_bandpath = self.band_list[ix_vis]
+            vis_bandpath = self.band_list[ix_vis]  # Path
 
             # ------------------------------ #
             #        load visible band       #
@@ -967,8 +1056,20 @@ class GlintCorr:
 
                 # get metadata
                 kwargs = ds_vis.meta.copy()
-                nodata = kwargs["nodata"]
+                nodata = kwargs["nodata"]  # this is -999
                 spatial_res = int(abs(kwargs["transform"].a))
+
+                rio_funcs.check_image_singleval(vis_im, int(nodata), "vis_im")
+
+                # do this once!
+                if z == 0:
+                    if p_nodata != nodata:
+                        p_glint[p_glint == p_nodata] = nodata
+                        if isinstance(p_fresnel, np.ndarray):
+                            p_fresnel[p_fresnel != p_nodata] *= self.scale_factor
+                            p_fresnel[p_fresnel == p_nodata] = nodata
+                            # convert from np.float32 to np.int16
+                            p_fresnel = np.array(p_fresnel, order="C", dtype=vis_im.dtype)
 
                 # ------------------------------ #
                 #  Resample and load fmask_file  #
@@ -1003,7 +1104,7 @@ class GlintCorr:
             with rasterio.open(deglint_otif, "w", **kwargs) as dst:
                 dst.write(deglint_band, 1)
 
-            if os.path.exists(deglint_otif):
+            if deglint_otif.exists():
                 deglint_bandlist.append(deglint_otif)
 
         # endfor z
