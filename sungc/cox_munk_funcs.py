@@ -4,7 +4,7 @@ import numpy as np
 import numexpr as nexpr
 
 from sungc.tiler import generate_tiles
-from sungc.rasterio_funcs import load_singleband
+from sungc.rasterio_funcs import load_singleband, check_image_singleval
 
 
 def calc_pfresnel(w, n_sw=1.34):
@@ -87,11 +87,17 @@ def cm_sunglint(
         * if input arrays are not two-dimensional
         * if dimension mismatch
         * if wind_speed < 0
+        * if input arrays only contain nodata
     """
 
     view_zenith, vzen_meta = load_singleband(view_zenith_file)
     solar_zenith, szen_meta = load_singleband(solar_zenith_file)
     relative_azimuth, razi_meta = load_singleband(relative_azimuth_file)
+
+    # for these arrays, nodata = np.nan
+    check_image_singleval(view_zenith, vzen_meta["nodata"], "view_zenith")
+    check_image_singleval(solar_zenith, szen_meta["nodata"], "solar_zenith")
+    check_image_singleval(relative_azimuth, razi_meta["nodata"], "relative_azimuth")
 
     cm_glint_meta = vzen_meta.copy()
 
