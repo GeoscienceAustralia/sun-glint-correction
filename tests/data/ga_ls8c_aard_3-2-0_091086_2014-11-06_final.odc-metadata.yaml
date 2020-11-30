@@ -74,21 +74,14 @@ properties:
 measurements:
   lmbadj_blue:
     path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band02.tif
-  lmbadj_coastal_aerosol:
-    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band01.tif
   lmbadj_green:
     path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band03.tif
-  lmbadj_nir:
-    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band05.tif
-  lmbadj_panchromatic:
-    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band08.tif
-    grid: RES_15m
   lmbadj_red:
     path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band04.tif
   lmbadj_swir_1:
     path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band06.tif
   lmbadj_swir_2:
-    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band07.tif
+    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_DUMMY_band07.tif
   oa_azimuthal_exiting:
     path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_azimuthal-exiting.tif
   oa_azimuthal_incident:
