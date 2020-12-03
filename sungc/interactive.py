@@ -51,7 +51,7 @@ class RoiSelector(object):
         self,
         ax: matplotlib.axes.Axes,
         poly_xy: Optional[Union[list, tuple, None]] = None,
-        max_ds: Optional[Union[int, float] = 10],
+        max_ds: Optional[Union[int, float]] = 10,
     ):
         self.showverts = True
         self.max_ds = max_ds
