@@ -26,11 +26,6 @@ def check_image_singleval(image: np.ndarray, value: Union[float, int], img_name:
             raise Exception(f"{img_name} only contains a single value ({value})")
 
 
-def get_basename(filename: Path):
-    """ Get a file's basename without extension """
-    return filename.stem
-
-
 def get_resample_bandname(filename: Path, spatial_res: Union[int, float, str]):
     """ Get the basename of the resampled band """
     if filename.stem.lower().find("fmask") != -1:
@@ -38,7 +33,7 @@ def get_resample_bandname(filename: Path, spatial_res: Union[int, float, str]):
         out_base = "fmask-resmpl-{0}m.tif".format(spatial_res)
 
     else:
-        out_base = "{0}-resmpl-{1}m.tif".format(get_basename(filename), spatial_res)
+        out_base = "{0}-resmpl-{1}m.tif".format(filename.stem, spatial_res)
 
     return out_base
 
@@ -118,10 +113,10 @@ def load_bands(bandlist: list, scale_factor: Union[int, float], apply_scaling: b
             band[band <= 0] = nodata_val
 
             spectral_cube[z, :, :] = band
-            meta_dict["band_{0}".format(z + 1)] = get_basename(bandlist[z])
+            meta_dict["band_{0}".format(z + 1)] = bandlist[z].stem
 
     meta_dict["count"] = nbands
-    meta_dict["dtype"] = data_type.__str__()
+    meta_dict["dtype"] = data_type.name
     return spectral_cube, meta_dict
 
 
@@ -264,7 +259,7 @@ def resample_bands(
 
             # this creates the following warning:
             # CPLE_NotSupported in driver GTiff does not support creation option BAND_1
-            # metad["band_{0}".format(z + 1)] = get_basename(bandlist[z])
+            # metad["band_{0}".format(z + 1)] = bandlist[z].stem
 
             if load:
                 spectral_cube.append(np.copy(resmpl_band))
