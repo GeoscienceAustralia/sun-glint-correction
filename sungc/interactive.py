@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 
-from typing import Union
+from typing import Optional, Union
 from shapely import geometry
 from matplotlib import patches
 from PIL import Image, ImageDraw
@@ -50,8 +50,8 @@ class RoiSelector(object):
     def __init__(
         self,
         ax: matplotlib.axes.Axes,
-        poly_xy: Union[list, tuple, None] = None,
-        max_ds: Union[int, float] = 10,
+        poly_xy: Optional[Union[list, tuple, None]] = None,
+        max_ds: Optional[Union[int, float] = 10],
     ):
         self.showverts = True
         self.max_ds = max_ds
