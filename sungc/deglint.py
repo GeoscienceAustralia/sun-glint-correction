@@ -328,7 +328,7 @@ class GlintCorr:
         # a list of bands that are not needed for deglinting
         skip_bands = [
             "contiguity",
-            "azimuthal_exiting",
+            "azimuthal-exiting",
             "azimuthal-incident",
             "combined-terrain-shadow",
             "relative-slope",
@@ -486,7 +486,7 @@ class GlintCorr:
         rio_meta["band_1"] = rgb_bandlist[0].stem
         rio_meta["band_2"] = rgb_bandlist[1].stem
         rio_meta["band_3"] = rgb_bandlist[2].stem
-        rio_meta["dtype"] = rgb_im.dtype.__str__()  # this should np.unit8
+        rio_meta["dtype"] = rgb_im.dtype.name  # this should np.unit8
 
         return rgb_im, rio_meta
 
@@ -604,7 +604,8 @@ class GlintCorr:
             nir_ncols = nir_ds.width
             nir_im = nir_ds.read(1)
 
-            rio_funcs.check_image_singleval(nir_im, int(nir_ds.meta["nodata"]), "nir_im")
+            if nir_ds.nodata is not None:
+                rio_funcs.check_image_singleval(nir_im, nir_ds.nodata, "nir_im")
 
         # ------------------------------ #
         nbands = len(vis_band_ids)
@@ -626,7 +627,8 @@ class GlintCorr:
                 kwargs = ds_vis.meta.copy()
                 nodata = kwargs["nodata"]
 
-                rio_funcs.check_image_singleval(vis_im, int(nodata), "vis_im")
+                if nodata is not None:
+                    rio_funcs.check_image_singleval(vis_im, nodata, "vis_im")
 
                 spatial_res = int(abs(kwargs["transform"].a))
 
@@ -792,9 +794,10 @@ class GlintCorr:
             nir_ncols = nir_ds.width
             nir_im_orig = nir_ds.read(1)
 
-            rio_funcs.check_image_singleval(
-                nir_im_orig, int(nir_ds.nodata), "nir_im_orig"
-            )
+            if nir_ds.nodata is not None:
+                rio_funcs.check_image_singleval(
+                    nir_im_orig, nir_ds.nodata, "nir_im_orig"
+                )
 
         # ------------------------------ #
         nbands = len(vis_band_ids)
@@ -817,7 +820,8 @@ class GlintCorr:
                 nodata = kwargs["nodata"]
                 spatial_res = int(abs(kwargs["transform"].a))
 
-                rio_funcs.check_image_singleval(vis_im, int(nodata), "vis_im")
+                if nodata is not None:
+                    rio_funcs.check_image_singleval(vis_im, nodata, "vis_im")
 
                 # ------------------------------ #
                 #       Resample NIR band        #
@@ -1059,7 +1063,8 @@ class GlintCorr:
                 nodata = kwargs["nodata"]  # this is -999
                 spatial_res = int(abs(kwargs["transform"].a))
 
-                rio_funcs.check_image_singleval(vis_im, int(nodata), "vis_im")
+                if nodata is not None:
+                    rio_funcs.check_image_singleval(vis_im, nodata, "vis_im")
 
                 # do this once!
                 if z == 0:
