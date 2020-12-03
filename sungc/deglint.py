@@ -795,9 +795,7 @@ class GlintCorr:
             nir_im_orig = nir_ds.read(1)
 
             if nir_ds.nodata is not None:
-                rio_funcs.check_image_singleval(
-                    nir_im_orig, nir_ds.nodata, "nir_im_orig"
-                )
+                rio_funcs.check_image_singleval(nir_im_orig, nir_ds.nodata, "nir_im_orig")
 
         # ------------------------------ #
         nbands = len(vis_band_ids)
