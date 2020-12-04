@@ -1,0 +1,123 @@
+---
+# Dataset
+$schema: https://schemas.opendatacube.org/dataset
+id: 4c4177ef-fcb2-46af-9378-c444779fe997
+
+label: ga_ls8c_aard_3-2-0_091086_2014-11-06_final
+product:
+  name: ga_ls8c_aard_3
+  href: https://collections.dea.ga.gov.au/product/ga_ls8c_aard_3
+
+crs: epsg:32655
+geometry:
+  type: Polygon
+  coordinates: [[[470775.0, -4030395.0], [470715.98776388215, -4030447.3652010215],
+      [470565.89572499564, -4031017.7239312488], [467595.8580298051, -4043077.8764072857],
+      [424455.0, -4220115.0], [424657.9123697058, -4220204.150737501], [606787.9128648278,
+        -4264484.150857879], [608295.0, -4264815.0], [608384.1562403908, -4264582.064959043],
+      [654254.1562403908, -4075282.0649590422], [654246.2132034355, -4075163.7867965642],
+      [470775.0, -4030395.0]]]
+grids:
+  default:
+    shape: [7861, 7821]
+    transform: [30.0, 0.0, 423285.0, 0.0, -30.0, -4029885.0, 0.0, 0.0, 1.0]
+  RES_15m:
+    shape: [15721, 15641]
+    transform: [15.0, 0.0, 423292.5, 0.0, -15.0, -4029892.5, 0.0, 0.0, 1.0]
+
+properties:
+  datetime: 2014-11-06 23:57:30.326870Z
+  dea:dataset_maturity: final
+  eo:cloud_cover: 5.88089322211954
+  eo:gsd: 15.0  # Ground sample distance (m)
+  eo:instrument: OLI_TIRS
+  eo:platform: landsat-8
+  eo:sun_azimuth: 58.19197227
+  eo:sun_elevation: 56.6866517
+  fmask:clear: 79.06773496852651
+  fmask:cloud: 5.88089322211954
+  fmask:cloud_shadow: 0.6848850487897276
+  fmask:snow: 0.0
+  fmask:water: 14.366486760564232
+  gqa:abs_iterative_mean_x: 0.18
+  gqa:abs_iterative_mean_xy: 0.26
+  gqa:abs_iterative_mean_y: 0.19
+  gqa:abs_x: 0.43
+  gqa:abs_xy: 0.54
+  gqa:abs_y: 0.32
+  gqa:cep90: 0.52
+  gqa:iterative_mean_x: -0.08
+  gqa:iterative_mean_xy: 0.16
+  gqa:iterative_mean_y: 0.14
+  gqa:iterative_stddev_x: 0.28
+  gqa:iterative_stddev_xy: 0.35
+  gqa:iterative_stddev_y: 0.2
+  gqa:mean_x: -0.2
+  gqa:mean_xy: 0.22
+  gqa:mean_y: 0.1
+  gqa:stddev_x: 2.39
+  gqa:stddev_xy: 2.57
+  gqa:stddev_y: 0.95
+  landsat:collection_category: T1
+  landsat:collection_number: 1
+  landsat:landsat_product_id: LC08_L1TP_091086_20141106_20170417_01_T1
+  landsat:landsat_scene_id: LC80910862014310LGN01
+  landsat:wrs_path: 91
+  landsat:wrs_row: 86
+  odc:dataset_version: 3.2.0
+  odc:file_format: GeoTIFF
+  odc:processing_datetime: 2020-11-09 05:00:19.063344Z
+  odc:producer: ga.gov.au
+  odc:product_family: aard
+  odc:region_code: '091086'
+
+measurements:
+  lmbadj_blue:
+    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band02.tif
+  lmbadj_green:
+    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band03.tif
+  lmbadj_red:
+    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band04.tif
+  lmbadj_swir_1:
+    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band06.tif
+  lmbadj_swir_2:
+    path: ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_DUMMY_band07.tif
+  oa_azimuthal_exiting:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_azimuthal-exiting.tif
+  oa_azimuthal_incident:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_azimuthal-incident.tif
+  oa_combined_terrain_shadow:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_combined-terrain-shadow.tif
+  oa_exiting_angle:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_exiting-angle.tif
+  oa_fmask:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_fmask.tif
+  oa_incident_angle:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_incident-angle.tif
+  oa_lmbadj_contiguity:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_lmbadj-contiguity.tif
+  oa_relative_azimuth:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_relative-azimuth.tif
+  oa_relative_slope:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_relative-slope.tif
+  oa_satellite_azimuth:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_satellite-azimuth.tif
+  oa_satellite_view:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_satellite-view.tif
+  oa_solar_azimuth:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_solar-azimuth.tif
+  oa_solar_zenith:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_solar-zenith.tif
+  oa_time_delta:
+    path: ga_ls8c_oa_3-2-0_091086_2014-11-06_final_time-delta.tif
+
+accessories:
+  checksum:sha1:
+    path: ga_ls8c_aard_3-2-0_091086_2014-11-06_final.sha1
+  metadata:processor:
+    path: ga_ls8c_aard_3-2-0_091086_2014-11-06_final.proc-info.yaml
+
+lineage:
+  level1:
+  - d0a5afde-4d8d-5938-aa42-55b6c84a14fe
+...

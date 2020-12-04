@@ -4,7 +4,7 @@ import numpy as np
 import numexpr as nexpr
 
 from sungc.tiler import generate_tiles
-from sungc.rasterio_funcs import load_singleBand
+from sungc.rasterio_funcs import load_singleband, check_image_singleval
 
 
 def calc_pfresnel(w, n_sw=1.34):
@@ -87,11 +87,17 @@ def cm_sunglint(
         * if input arrays are not two-dimensional
         * if dimension mismatch
         * if wind_speed < 0
+        * if input arrays only contain nodata
     """
 
-    view_zenith, vzen_meta = load_singleBand(view_zenith_file)
-    solar_zenith, szen_meta = load_singleBand(solar_zenith_file)
-    relative_azimuth, razi_meta = load_singleBand(relative_azimuth_file)
+    view_zenith, vzen_meta = load_singleband(view_zenith_file)
+    solar_zenith, szen_meta = load_singleband(solar_zenith_file)
+    relative_azimuth, razi_meta = load_singleband(relative_azimuth_file)
+
+    # for these arrays, nodata = np.nan
+    check_image_singleval(view_zenith, vzen_meta["nodata"], "view_zenith")
+    check_image_singleval(solar_zenith, szen_meta["nodata"], "solar_zenith")
+    check_image_singleval(relative_azimuth, razi_meta["nodata"], "relative_azimuth")
 
     cm_glint_meta = vzen_meta.copy()
 
@@ -102,13 +108,13 @@ def cm_sunglint(
     ):
         raise Exception("\ninput arrays must be two dimensional")
 
-    nRows, nCols = relative_azimuth.shape
+    nrows, ncols = relative_azimuth.shape
 
     if (
-        (nRows != solar_zenith.shape[0])
-        or (nRows != view_zenith.shape[0])
-        or (nCols != solar_zenith.shape[1])
-        or (nCols != view_zenith.shape[1])
+        (nrows != solar_zenith.shape[0])
+        or (nrows != view_zenith.shape[0])
+        or (ncols != solar_zenith.shape[1])
+        or (ncols != view_zenith.shape[1])
     ):
         raise Exception("\nDimension mismatch")
 
@@ -116,11 +122,11 @@ def cm_sunglint(
         raise Exception("\nwind_speed must be greater than 0 m/s")
 
     # create output array
-    p_glint = np.zeros([nRows, nCols], order="C", dtype=view_zenith.dtype)
+    p_glint = np.zeros([nrows, ncols], order="C", dtype=view_zenith.dtype)
 
     p_fresnel = None
     if return_fresnel:
-        p_fresnel = np.zeros([nRows, nCols], order="C", dtype=view_zenith.dtype)
+        p_fresnel = np.zeros([nrows, ncols], order="C", dtype=view_zenith.dtype)
 
     # Define parameters needed for the wind-direction-independent model
     pi_ = np.pi  # noqa # pylint: disable=unused-variable
@@ -134,7 +140,7 @@ def cm_sunglint(
     # large, then a memory issue may arise. A better way would be to
     # iterate through tiles/blocks of these input arrays. This will
     # cause a slightly longer processing time
-    tiles = generate_tiles(samples=nCols, lines=nRows, xtile=256, ytile=256)
+    tiles = generate_tiles(samples=ncols, lines=nrows, xtile=256, ytile=256)
     for t_ix in tiles:
 
         phi_raz = np.copy(relative_azimuth[t_ix])
@@ -155,7 +161,7 @@ def cm_sunglint(
         # w = angle of incidence of a light ray at the water surface
         # use numexpr instead
         cos_2w = nexpr.evaluate(  # noqa # pylint: disable=unused-variable
-            "cos_theta_szn*cos_theta_vzn " "+ sin(theta_szn)*sin(theta_vzn)*sin(phi_raz)"
+            "cos_theta_szn*cos_theta_vzn + sin(theta_szn)*sin(theta_vzn)*sin(phi_raz)"
         )
 
         # use trig. identity, cos(x/2) = +/- sqrt{ [1 + cos(x)] / 2 }
@@ -166,18 +172,18 @@ def cm_sunglint(
         )  # noqa # pylint: disable=unused-variable
 
         # compute cos(B), where B = beta;  numpy.ndarray
-        cos_B = nexpr.evaluate(  # noqa: F841,E501 # pylint: disable=unused-variable
+        cos_b = nexpr.evaluate(  # noqa: F841,E501 # pylint: disable=unused-variable
             "(cos_theta_szn + cos_theta_vzn) / (2.0 * cos_w)"
         )  # noqa # pylint: disable=unused-variable
 
         # compute tan(B)^2 = sec(B)^2 -1;  numpy.ndarray
-        tanB_2 = nexpr.evaluate(  # noqa: F841,E501 # pylint: disable=unused-variable
-            "(1.0 / (cos_B ** 2.0)) - 1.0"
+        tan_b2 = nexpr.evaluate(  # noqa: F841,E501 # pylint: disable=unused-variable
+            "(1.0 / (cos_b ** 2.0)) - 1.0"
         )  # noqa # pylint: disable=unused-variable
 
         # compute surface slope distribution:
         dist_SurfSlope = nexpr.evaluate(  # noqa # pylint: disable=unused-variable
-            "1.0 / (pi_ * sigma2) * exp(-1.0 * tanB_2 / sigma2)"
+            "1.0 / (pi_ * sigma2) * exp(-1.0 * tan_b2 / sigma2)"
         )
 
         # calculcate the Fresnel reflectance, numpy.ndarray
@@ -194,7 +200,7 @@ def cm_sunglint(
         # calculate the glint reflectance image, numpy.ndarray
         p_glint[t_ix] = nexpr.evaluate(
             "pi_ * p_fr * dist_SurfSlope "
-            "/ (4.0 * cos_theta_szn * cos_theta_vzn * (cos_B ** 4))"
+            "/ (4.0 * cos_theta_szn * cos_theta_vzn * (cos_b ** 4))"
         )
 
     return p_glint, p_fresnel, cm_glint_meta

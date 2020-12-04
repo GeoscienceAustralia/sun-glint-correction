@@ -43,6 +43,5 @@ setup(
         "rasterio",
         "matplotlib",
         "numexpr",
-        "mpl_toolkits",
     ],
 )

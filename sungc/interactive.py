@@ -4,8 +4,10 @@ import sys
 import fiona
 import rasterio
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 
+from typing import Optional, Union
 from shapely import geometry
 from matplotlib import patches
 from PIL import Image, ImageDraw
@@ -20,12 +22,14 @@ from PIL import Image, ImageDraw
 """
 
 
-class ROI_Selector(object):
+class RoiSelector(object):
     """
     An interactive polygon editor.
 
     Parameters
     ----------
+    ax: matplotlib.axes.Axes
+
     poly_xy : list of (float, float)
         List of (x, y) coordinates used as vertices of the polygon.
 
@@ -43,11 +47,34 @@ class ROI_Selector(object):
           line connecting two existing vertices
     """
 
-    def __init__(self, ax=None, poly_xy=None, max_ds=10):
+    def __init__(
+        self,
+        ax: matplotlib.axes.Axes,
+        poly_xy: Optional[Union[list, tuple, None]] = None,
+        max_ds: Optional[Union[int, float]] = 10,
+    ):
         self.showverts = True
         self.max_ds = max_ds
         self.ax = ax
         self.poly_xy = poly_xy
+
+        if not isinstance(ax, matplotlib.axes.Axes):
+            raise Exception("ax in RoiSelector must be matplotlib.axes.Axes")
+
+        if not isinstance(max_ds, (float, int)):
+            raise Exception("max_ds in RoiSelector must be int or float")
+
+        if not isinstance(poly_xy, (list, tuple, type(None))):
+            raise Exception("poly_xy in RoiSelector must be a list, tuple or None")
+
+        if isinstance(poly_xy, (list, tuple)):
+            # poly_xy contains the vertices of a polygon. The smallest
+            # polygon possible is a triangle, hence nVertices >= 3
+            if len(poly_xy) < 3:
+                raise Exception("input ploy_xy in RoiSelector must have >= 3 vertices")
+
+        if max_ds <= 0:
+            raise Exception("max_ds in RoiSelector must be > 0")
 
     def interative(self):
 
