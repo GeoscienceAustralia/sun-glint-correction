@@ -16,7 +16,7 @@ from pathlib import Path
 from sungc import deglint
 from sungc.cox_munk_funcs import cm_sunglint
 
-from . import urd, assert_with_expected, create_halved_band
+from . import urd, create_halved_band
 
 # specify the path to the odc_metadata.yaml of the test datasets
 data_path = Path(__file__).parent / "data"
