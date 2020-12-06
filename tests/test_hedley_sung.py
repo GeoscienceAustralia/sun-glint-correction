@@ -67,7 +67,6 @@ def test_hedley_image(tmp_path):
         / "ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band03-deglint-600m.tif"
     )
 
-
     # ensure that all valid sungint corrected pixels match expected
     with rasterio.open(exp_sungc_band, "r") as exp_sungc_ds:
         urd_band = urd(sungc_band[0, :, :], exp_sungc_ds.read(1), exp_sungc_ds.nodata)
