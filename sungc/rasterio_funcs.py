@@ -26,7 +26,7 @@ def check_image_singleval(image: np.ndarray, value: Union[float, int], img_name:
             raise Exception(f"{img_name} only contains a single value ({value})")
 
 
-def get_resample_bandname(filename: Path, spatial_res: Union[int, float, str]):
+def get_resample_bandname(filename: Path, spatial_res: Union[int, float, str]) -> str:
     """ Get the basename of the resampled band """
     if filename.stem.lower().find("fmask") != -1:
         # fmask has a different naming convention
@@ -305,7 +305,7 @@ def resample_bands(
 
 def resample_file_to_ds(
     image_file: Path, ref_ds: DatasetReader, resample_option: Resampling
-):
+) -> np.ndarray:
     """
     Resample a file to a reference band given
     by the rasterio dataset (ref_ds)
@@ -334,21 +334,24 @@ def resample_file_to_ds(
     """
     with rasterio.open(image_file, "r") as src_ds:
         resampled_img = resample_band_to_ds(
-            rasterio.band(src_ds, 1), src_ds.meta, ref_ds, resample_option
+            src_ds.read(1), src_ds.meta, ref_ds, resample_option
         )
     return resampled_img
 
 
 def resample_band_to_ds(
-    img: np.ndarray, img_meta: dict, ref_ds: DatasetReader, resample_option: Resampling
-):
+    img: np.ndarray,
+    img_meta: dict,
+    ref_ds: DatasetReader,
+    resample_option: Resampling,
+) -> np.ndarray:
     """
     Resample a numpy.ndarray to a reference band given
     by the rasterio dataset (ref_ds)
 
     Parameters
     ----------
-    img : numpy.ndarray
+    img : numpy.ndarray or rasterio.Band
         loaded image to resample
 
     img_meta : dict
@@ -356,7 +359,7 @@ def resample_band_to_ds(
 
     ref_ds : DatasetReader
         A rasterio dataset of the reference band
-        that fmask will be resampled
+        that will be resampled
 
     resample_option : <enum 'Resampling'> class
         The Resampling.<> algorithm, e.g.
@@ -371,17 +374,30 @@ def resample_band_to_ds(
     resampled_img : numpy.ndarray
         2-Dimensional numpy array
     """
-    resampled_img = np.zeros([ref_ds.height, ref_ds.width], order="C", dtype=img.dtype)
 
-    reproject(
-        source=img,
-        destination=resampled_img,
-        src_transform=img_meta["transform"],
-        src_crs=img_meta["crs"],
-        dst_transform=ref_ds.transform,
-        dst_crs=ref_ds.crs,
-        resampling=resample_option,
-    )
+    req_keys = ["width", "height", "crs"]
+    all_true = all([True for key in req_keys if img_meta[key] == ref_ds.meta[key]])
+
+    if ref_ds.transform.almost_equals(img_meta["transform"]) and all_true:
+        # Affine transform, crs and image dimensions
+        # are the same ->  no need to resample
+        resampled_img = np.array(img, order="K", copy=True)
+
+    else:
+        resampled_img = np.zeros(
+            [ref_ds.height, ref_ds.width], order="C", dtype=img.dtype
+        )
+
+        reproject(
+            source=img,
+            destination=resampled_img,
+            src_transform=img_meta["transform"],
+            src_crs=img_meta["crs"],
+            dst_transform=ref_ds.transform,
+            dst_crs=ref_ds.crs,
+            resampling=resample_option,
+        )
+
     return resampled_img
 
 
