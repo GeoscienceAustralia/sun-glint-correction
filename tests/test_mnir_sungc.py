@@ -5,10 +5,11 @@ Unittests for the NIR subtraction algorithm
 """
 
 import pytest
+import rasterio
 from pathlib import Path
 
 from sungc import deglint
-from . import assert_with_expected
+from . import urd
 
 # specify the path to the odc_metadata.yaml of the test datasets
 data_path = Path(__file__).parent / "data"
@@ -32,12 +33,14 @@ def test_mnir_image(tmp_path):
     mnir_dir = tmp_path / "MINUS_NIR"
     mnir_dir.mkdir()
 
-    mnir_bandlist = g.nir_subtraction(
+    mnir_xarrlist = g.nir_subtraction(
         vis_band_ids=["3"],
         nir_band_id="6",
         odir=mnir_dir,
         water_val=5,
     )
+
+    sungc_band = mnir_xarrlist[0].lmbadj_green_subtract_deglint.values  # 3D array
 
     # path to expected sunglint corrected output from NIR subtraction
     exp_sungc_band = (
@@ -46,8 +49,10 @@ def test_mnir_image(tmp_path):
         / "ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band03-deglint-600m.tif"
     )
 
-    # assert that output in mnir_bandlist matches expected_sungc_band3
-    assert_with_expected(Path(mnir_bandlist[0]), exp_sungc_band, 0.001)
+    # ensure that all valid sungint corrected pixels match expected
+    with rasterio.open(exp_sungc_band, "r") as exp_sungc_ds:
+        urd_band = urd(sungc_band[0, :, :], exp_sungc_ds.read(1), exp_sungc_ds.nodata)
+        assert urd_band.max() < 0.001
 
 
 def test_mnir_bands(tmp_path):

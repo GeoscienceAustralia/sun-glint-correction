@@ -17,12 +17,13 @@ Notes:
 """
 
 import pytest
+import rasterio
 from pathlib import Path
 from fiona import collection
 from shapely.geometry import Point, LineString, mapping
 
 from sungc import deglint
-from . import assert_with_expected
+from . import urd
 
 # specify the path to the odc_metadata.yaml of the test datasets
 data_path = Path(__file__).parent / "data"
@@ -47,7 +48,7 @@ def test_hedley_image(tmp_path):
     # Hedley et al. 2005 #
     # ------------------ #
     # deglint the vis bands using band 6
-    hedley_bandlist = g.hedley_2005(
+    hedley_xarrlist = g.hedley_2005(
         vis_band_ids=["3"],
         nir_band_id="6",
         roi_shpfile=shp_file,
@@ -57,6 +58,8 @@ def test_hedley_image(tmp_path):
         plot=False,
     )
 
+    sungc_band = hedley_xarrlist[0].lmbadj_green_hedley_deglint.values  # 3D array
+
     # path to expected sunglint corrected output from Hedley et al.
     exp_sungc_band = (
         data_path
@@ -64,8 +67,10 @@ def test_hedley_image(tmp_path):
         / "ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band03-deglint-600m.tif"
     )
 
-    # assert that output in mnir_bandlist matches expected_sungc_band3
-    assert_with_expected(Path(hedley_bandlist[0]), exp_sungc_band, 0.001)
+    # ensure that all valid sungint corrected pixels match expected
+    with rasterio.open(exp_sungc_band, "r") as exp_sungc_ds:
+        urd_band = urd(sungc_band[0, :, :], exp_sungc_ds.read(1), exp_sungc_ds.nodata)
+        assert urd_band.max() < 0.001
 
     # plot=False. Ensure that no png was created in hedley_dir
     png_list = list(hedley_dir.glob("Correlation_*_vs_*.png"))

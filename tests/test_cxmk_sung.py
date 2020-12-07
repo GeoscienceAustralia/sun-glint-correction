@@ -16,7 +16,7 @@ from pathlib import Path
 from sungc import deglint
 from sungc.cox_munk_funcs import cm_sunglint
 
-from . import urd, assert_with_expected, create_halved_band
+from . import urd, create_halved_band
 
 # specify the path to the odc_metadata.yaml of the test datasets
 data_path = Path(__file__).parent / "data"
@@ -40,12 +40,14 @@ def test_cxmk_image(tmp_path):
     cxmk_dir = tmp_path / "COX_MUNK"
     cxmk_dir.mkdir()
 
-    cxmk_bandlist = g.cox_munk(
+    cxmk_xarrlist = g.cox_munk(
         vis_band_ids=["3"],
         odir=cxmk_dir,
         wind_speed=5,
         water_val=5,
     )
+
+    sungc_band = cxmk_xarrlist[0].lmbadj_green_cox_munk_deglint.values  # 3D array
 
     # path to expected sunglint corrected output from NIR subtraction
     exp_sungc_band = (
@@ -54,8 +56,10 @@ def test_cxmk_image(tmp_path):
         / "ga_ls8c_lmbadj_3-2-0_091086_2014-11-06_final_band03-deglint-600m.tif"
     )
 
-    # assert that output in mnir_bandlist matches expected_sungc_band3
-    assert_with_expected(Path(cxmk_bandlist[0]), exp_sungc_band, 0.001)
+    # ensure that all valid sungint corrected pixels match expected
+    with rasterio.open(exp_sungc_band, "r") as exp_sungc_ds:
+        urd_band = urd(sungc_band[0, :, :], exp_sungc_ds.read(1), exp_sungc_ds.nodata)
+        assert urd_band.max() < 0.001
 
 
 def test_glint_images(tmp_path):
