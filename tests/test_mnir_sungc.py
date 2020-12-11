@@ -15,28 +15,24 @@ from . import urd
 data_path = Path(__file__).parent / "data"
 odc_meta_file = data_path / "ga_ls8c_aard_3-2-0_091086_2014-11-06_final.odc-metadata.yaml"
 
-# specify the product
-product = "lmbadj"
+# specify the sub_product
+sub_product = "lmbadj"
 
 
-def test_mnir_image(tmp_path):
+def test_mnir_image():
     """
     Check that the generated deglinted band is nearly identical
     to the expected deglinted band
     """
     # Initiate the sunglint correction class
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     # ---------------------- #
     #     NIR subtraction    #
     # ---------------------- #
-    mnir_dir = tmp_path / "MINUS_NIR"
-    mnir_dir.mkdir()
-
-    mnir_xarrlist = g.nir_subtraction(
-        vis_band_ids=["3"],
-        nir_band_id="6",
-        odir=mnir_dir,
+    mnir_xarrlist = g.glint_subtraction(
+        vis_bands=["3"],
+        corr_band="6",
         water_val=5,
     )
 
@@ -55,59 +51,49 @@ def test_mnir_image(tmp_path):
         assert urd_band.max() < 0.001
 
 
-def test_mnir_bands(tmp_path):
+def test_mnir_bands():
     """
-    Ensure that nir_subtraction() raises and Exception if
-    the specified vis_band_id/nir_band_id do not exist
+    Ensure that glint_subtraction() raises and Exception if
+    the specified vis_band_id/corr_band do not exist
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
-
-    mnir_dir = tmp_path / "MINUS_NIR"
-    mnir_dir.mkdir()
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     with pytest.raises(Exception) as excinfo:
-        g.nir_subtraction(
-            vis_band_ids=["20"],  # this band id doesn't exist
-            nir_band_id="6",
-            odir=mnir_dir,
+        g.glint_subtraction(
+            vis_bands=["20"],  # this band id doesn't exist
+            corr_band="6",
             water_val=5,
         )
     assert "is missing from bands" in str(excinfo)
 
     with pytest.raises(Exception) as excinfo:
-        g.nir_subtraction(
-            vis_band_ids=["3"],
-            nir_band_id="20",  # this band id doesn't exist
-            odir=mnir_dir,
+        g.glint_subtraction(
+            vis_bands=["3"],
+            corr_band="20",  # this band id doesn't exist
             water_val=5,
         )
     assert "is missing from bands" in str(excinfo)
 
 
-def test_empty_inputs(tmp_path):
+def test_empty_inputs():
     """
-    Ensure that nir_subtraction() raises and Exception if
+    Ensure that glint_subtraction() raises and Exception if
     the VIS and NIR band only contain nodata pixels
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
-
-    mnir_dir = tmp_path / "MINUS_NIR"
-    mnir_dir.mkdir()
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     with pytest.raises(Exception) as excinfo:
-        g.nir_subtraction(
-            vis_band_ids=["3"],
-            nir_band_id="7",  # this dummy band only contains nodata
-            odir=mnir_dir,
+        g.glint_subtraction(
+            vis_bands=["3"],
+            corr_band="7",  # this dummy band only contains nodata
             water_val=5,
         )
     assert "only contains a single value" in str(excinfo)
 
     with pytest.raises(Exception) as excinfo:
-        g.nir_subtraction(
-            vis_band_ids=["7"],  # this dummy band only contains nodata
-            nir_band_id="6",
-            odir=mnir_dir,
+        g.glint_subtraction(
+            vis_bands=["7"],  # this dummy band only contains nodata
+            corr_band="6",
             water_val=5,
         )
     assert "only contains a single value" in str(excinfo)
