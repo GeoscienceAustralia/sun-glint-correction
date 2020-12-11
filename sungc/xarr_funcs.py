@@ -7,7 +7,9 @@ import pandas as pd
 from datetime import datetime
 
 
-def create_xr(xr_dvars: dict, meta: dict, overpass_datetime: datetime, desc: str):
+def create_xr(
+    xr_dvars: dict, meta: dict, overpass_datetime: datetime, desc: str
+) -> xr.Dataset:
     """
     Create an xarray object
 
