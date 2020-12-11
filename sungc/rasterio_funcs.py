@@ -6,10 +6,10 @@ import rasterio
 import rasterio.mask
 import numpy as np
 
-from typing import Union
 from pathlib import Path
 from rasterio import DatasetReader
 from rasterio.warp import reproject, Resampling
+from typing import Union, List, Tuple
 
 
 def check_image_singleval(image: np.ndarray, value: Union[float, int], img_name: str):
@@ -38,7 +38,7 @@ def get_resample_bandname(filename: Path, spatial_res: Union[int, float, str]) -
     return out_base
 
 
-def load_singleband(rio_file: Path):
+def load_singleband(rio_file: Path) -> Tuple[np.ndarray, dict]:
     """
     Loads file as a numpy.ndarray
 
@@ -62,7 +62,9 @@ def load_singleband(rio_file: Path):
     return img, meta
 
 
-def load_bands(bandlist: list, scale_factor: Union[int, float], apply_scaling: bool):
+def load_bands(
+    bandlist: list, scale_factor: Union[int, float], apply_scaling: bool
+) -> Tuple[np.ndarray, dict]:
     """
     load the bands in bandlist into a 3D array.
 
@@ -83,6 +85,9 @@ def load_bands(bandlist: list, scale_factor: Union[int, float], apply_scaling: b
     -------
     spectral_cube : numpy.ndarray
         multi-band array with dimensions of [nbands, nrows, ncols]
+
+    meta : dict
+        rasterio metadata
     """
     if scale_factor <= 0:
         raise Exception("load_bands: scale_factor <= 0")
@@ -127,7 +132,7 @@ def resample_bands(
     load=True,
     save=False,
     odir: Union[Path, None] = None,
-):
+) -> Tuple[Union[List[Path], None], Union[np.ndarray, None], Union[dict, None]]:
     """
     Resample bands (bandlist) to the specified
     spatial resolution using the specified resampling option
@@ -401,7 +406,7 @@ def resample_band_to_ds(
     return resampled_img
 
 
-def load_mask_from_shp(shp_file: Path, ref_ds: DatasetReader):
+def load_mask_from_shp(shp_file: Path, ref_ds: DatasetReader) -> np.ndarray:
     """
     Load a mask containing geometries from a shapefile,
     using a reference dataset
