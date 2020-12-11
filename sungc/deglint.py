@@ -876,6 +876,9 @@ class GlintCorr:
         """
         # get name of the sunglint contaminated
         # deep water region polygon ascii file
+        if not isinstance(roi_shpfile, Path):
+            roi_shpfile = Path(roi_shpfile)
+
         if not roi_shpfile:
             roi_shpfile = self.group_path / "deepWater_ROI_polygon.shp"
 
@@ -890,6 +893,9 @@ class GlintCorr:
         # create output directory
         if not odir:
             odir = self.group_path / "DEGLINT" / "HEDLEY"
+        else:
+            if not isinstance(odir, Path):
+                odir = Path(odir)
 
         if not odir.exists():
             odir.mkdir(exist_ok=True)
@@ -1094,21 +1100,33 @@ class GlintCorr:
         """
         # --- check vzen_file --- #
         if vzen_file:
+            if not isinstance(vzen_file, Path):
+                vzen_file = Path(vzen_file)
+
             self.check_path_exists(vzen_file)
+
         else:
             # find view zenith from self.meas_dict
             vzen_file = self.find_file("satellite_view")
 
         # --- check szen_file --- #
         if szen_file:
+            if not isinstance(szen_file, Path):
+                szen_file = Path(szen_file)
+
             self.check_path_exists(szen_file)
+
         else:
             # find solar zenith from self.meas_dict
             szen_file = self.find_file("solar_zenith")
 
         # --- check razi_file --- #
         if razi_file:
+            if not isinstance(razi_file, Path):
+                razi_file = Path(razi_file)
+
             self.check_path_exists(razi_file)
+
         else:
             # find relative azimuth from self.meas_dict
             razi_file = self.find_file("relative_azimuth")
