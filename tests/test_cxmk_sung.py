@@ -15,6 +15,7 @@ import numpy as np
 from pathlib import Path
 from sungc import deglint
 from sungc.cox_munk_funcs import cm_sunglint
+from sungc.rasterio_funcs import load_singleband
 
 from . import urd, create_halved_band
 
@@ -22,27 +23,23 @@ from . import urd, create_halved_band
 data_path = Path(__file__).parent / "data"
 odc_meta_file = data_path / "ga_ls8c_aard_3-2-0_091086_2014-11-06_final.odc-metadata.yaml"
 
-# specify the product
-product = "lmbadj"
+# specify the sub_product
+sub_product = "lmbadj"
 
 
-def test_cxmk_image(tmp_path):
+def test_cxmk_image():
     """
     Check that the generated deglinted band is nearly identical
     to the expected deglinted band
     """
     # Initiate the sunglint correction class
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     # ------------------ #
     #    Cox and Munk    #
     # ------------------ #
-    cxmk_dir = tmp_path / "COX_MUNK"
-    cxmk_dir.mkdir()
-
     cxmk_xarrlist = g.cox_munk(
-        vis_band_ids=["3"],
-        odir=cxmk_dir,
+        vis_bands=["3"],
         wind_speed=5,
         water_val=5,
     )
@@ -62,7 +59,7 @@ def test_cxmk_image(tmp_path):
         assert urd_band.max() < 0.001
 
 
-def test_glint_images(tmp_path):
+def test_glint_images():
     """
     Tes that the generated glint reflectance is nearly
     identical to expected glint reflectance
@@ -74,17 +71,23 @@ def test_glint_images(tmp_path):
     )
 
     # Initiate the sunglint correction class
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     vzen_file = g.find_file("satellite_view")
     szen_file = g.find_file("solar_zenith")
     razi_file = g.find_file("relative_azimuth")
 
+    # load the required geometry images
+    vzen_im, vzen_meta = load_singleband(vzen_file)
+    szen_im, szen_meta = load_singleband(szen_file)
+    razi_im, razi_meta = load_singleband(razi_file)
+    cm_meta = vzen_meta.copy()
+
     # cox and munk:
-    p_glint, p_fresnel, cm_meta = cm_sunglint(
-        view_zenith_file=vzen_file,
-        solar_zenith_file=szen_file,
-        relative_azimuth_file=razi_file,
+    p_glint, p_fresnel = cm_sunglint(
+        view_zenith=vzen_im,
+        solar_zenith=szen_im,
+        relative_azimuth=razi_im,
         wind_speed=5,
         return_fresnel=False,
     )
@@ -101,40 +104,32 @@ def test_glint_images(tmp_path):
         assert urd_glint.max() < 0.001
 
 
-def test_cxmk_bands(tmp_path):
+def test_cxmk_bands():
     """
     Ensure that the Cox and Munk module raises an
     Exception if the specified vis_band_id does not exist
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
-
-    cxmk_dir = tmp_path / "COX_MUNK"
-    cxmk_dir.mkdir()
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     with pytest.raises(Exception) as excinfo:
         g.cox_munk(
-            vis_band_ids=["20"],  # this band id doesn't exist
-            odir=cxmk_dir,
+            vis_bands=["20"],  # this band id doesn't exist
             wind_speed=5,
             water_val=5,
         )
     assert "is missing from bands" in str(excinfo)
 
 
-def test_nodata_band(tmp_path):
+def test_nodata_band():
     """
     Ensure that the Cox and Munk module raises an
     Exception if the input band only contains nodata
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
-
-    cxmk_dir = tmp_path / "COX_MUNK"
-    cxmk_dir.mkdir()
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     with pytest.raises(Exception) as excinfo:
         g.cox_munk(
-            vis_band_ids=["7"],  # dummy band only contains nodata (-999)
-            odir=cxmk_dir,
+            vis_bands=["7"],  # dummy band only contains nodata (-999)
             wind_speed=5,
             water_val=5,
         )
@@ -148,7 +143,7 @@ def test_nodata_vzen(tmp_path):
     band only contains nodata. We will test this
     with the sensor view-zenith.
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     cxmk_dir = tmp_path / "COX_MUNK"
     cxmk_dir.mkdir()
@@ -174,9 +169,8 @@ def test_nodata_vzen(tmp_path):
     # specify dummy band
     with pytest.raises(Exception) as excinfo:
         g.cox_munk(
-            vis_band_ids=["3"],
+            vis_bands=["3"],
             vzen_file=dum_vzen,  # dummy band only contains nodata (np.nan)
-            odir=cxmk_dir,
             wind_speed=5,
             water_val=5,
         )
@@ -189,7 +183,7 @@ def test_geom_same_dims(tmp_path):
     Exception if a view-solar geometry band does not
     have the same dimensions as the other bands.
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     cxmk_dir = tmp_path / "COX_MUNK"
     cxmk_dir.mkdir()
@@ -202,29 +196,24 @@ def test_geom_same_dims(tmp_path):
     # bands
     with pytest.raises(Exception) as excinfo:
         g.cox_munk(
-            vis_band_ids=["3"],
+            vis_bands=["3"],
             vzen_file=resmpl_tifs[0],
-            odir=cxmk_dir,
             wind_speed=5,
             water_val=5,
         )
     assert "Dimension mismatch" in str(excinfo)
 
 
-def test_windspeed_lt0(tmp_path):
+def test_windspeed_lt0():
     """
     Ensure that the Cox and Munk module will raise an
     Exception if the wind speed < 0 m/s
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
-
-    cxmk_dir = tmp_path / "COX_MUNK"
-    cxmk_dir.mkdir()
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     with pytest.raises(Exception) as excinfo:
         g.cox_munk(
-            vis_band_ids=["3"],
-            odir=cxmk_dir,
+            vis_bands=["3"],
             wind_speed=-1,
             water_val=5,
         )
