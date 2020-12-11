@@ -2,12 +2,13 @@
 
 import numpy as np
 import numexpr as nexpr
-
+from typing import Union, Tuple
 from sungc.tiler import generate_tiles
-from sungc.rasterio_funcs import load_singleband, check_image_singleval
 
 
-def calc_pfresnel(w, n_sw=1.34):
+def calc_pfresnel(
+    w: Union[float, np.ndarray], n_sw: float = 1.34
+) -> Union[np.ndarray, float]:
     """
     Calculate the fresnel reflection of sunglint at the water's surface
 
@@ -35,12 +36,12 @@ def calc_pfresnel(w, n_sw=1.34):
 
 
 def cm_sunglint(
-    view_zenith_file,
-    solar_zenith_file,
-    relative_azimuth_file,
-    wind_speed,
-    return_fresnel=False,
-):
+    view_zenith: np.ndarray,
+    solar_zenith: np.ndarray,
+    relative_azimuth: np.ndarray,
+    wind_speed: float,
+    return_fresnel: bool = False,
+) -> Tuple[np.ndarray, Union[np.ndarray, None]]:
     """
     Estimates the wavelength-independent sunglint reflectance using the
     Cox and Munk (1954) algorithm. Here the wind direction is not taken
@@ -48,16 +49,16 @@ def cm_sunglint(
 
     Parameters
     ----------
-    view_zenith_file : str
-        filename of sensor view-zenith angle image
+    view_zenith : np.ndarray
+        sensor view-zenith angle image
         (units of image data: degrees)
 
-    solar_zenith_file : str
-        filename of solar zenith angle image
+    solar_zenith : np.ndarray
+        solar zenith angle image
         (units of image data: degrees)
 
-    relative_azimuth_file : str
-        filename of relative azimuth angle between sensor and sun
+    relative_azimuth : np.ndarray
+        relative azimuth angle between sensor and sun image
         image (units of image data: degrees)
 
     wind_speed : float
@@ -77,10 +78,6 @@ def cm_sunglint(
         if return_fresnel=False then p_fresnel=None
         if return_fresnel=True  then p_fresnel=numpy.ndarray
 
-    cm_glint_meta : dict
-        A dictionary containing (modified) rasterio metadata.
-        Useful if you want to save the outputs as geotiffs
-
     Raises
     ------
     Exception:
@@ -89,17 +86,6 @@ def cm_sunglint(
         * if wind_speed < 0
         * if input arrays only contain nodata
     """
-
-    view_zenith, vzen_meta = load_singleband(view_zenith_file)
-    solar_zenith, szen_meta = load_singleband(solar_zenith_file)
-    relative_azimuth, razi_meta = load_singleband(relative_azimuth_file)
-
-    # for these arrays, nodata = np.nan
-    check_image_singleval(view_zenith, vzen_meta["nodata"], "view_zenith")
-    check_image_singleval(solar_zenith, szen_meta["nodata"], "solar_zenith")
-    check_image_singleval(relative_azimuth, razi_meta["nodata"], "relative_azimuth")
-
-    cm_glint_meta = vzen_meta.copy()
 
     if (
         (view_zenith.ndim != 2)
@@ -203,4 +189,4 @@ def cm_sunglint(
             "/ (4.0 * cos_theta_szn * cos_theta_vzn * (cos_b ** 4))"
         )
 
-    return p_glint, p_fresnel, cm_glint_meta
+    return p_glint, p_fresnel

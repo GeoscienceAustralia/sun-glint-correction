@@ -4,14 +4,15 @@ import os
 import yaml
 import rasterio
 import numpy as np
+import xarray as xr
 import matplotlib.pyplot as plt
 
 from scipy import stats
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Union
 from datacube.model import Dataset
 from rasterio.warp import Resampling
+from typing import Optional, Union, List, Tuple
 
 import sungc.rasterio_funcs as rio_funcs
 from sungc.xarr_funcs import create_xr
@@ -20,12 +21,12 @@ from sungc.cox_munk_funcs import cm_sunglint
 from sungc.visualise import seadas_style_rgb, plot_correlations, display_image
 
 SUPPORTED_SENSORS = [
-    "sentinel_2a",
-    "sentinel_2b",
-    "landsat-5",
-    "landsat-7",
-    "landsat-8",
-    "worldview-2",
+    "sentinel2a",
+    "sentinel2b",
+    "landsat5",
+    "landsat7",
+    "landsat8",
+    "worldview2",
 ]
 
 
@@ -33,7 +34,8 @@ class GlintCorr:
     def __init__(
         self,
         dc_dataset: Union[Dataset, Path, str],
-        product: str,
+        sub_product: str,
+        scale_factor: Union[int, float] = 10000.0,
         fmask_file: Optional[Path] = None,
     ):
         """
@@ -41,11 +43,17 @@ class GlintCorr:
 
         Parameters
         ----------
-        dc_dataset : datacube.model.Dataset or Path
+        dc_dataset: datacube.model.Dataset, Path or str
             Datacube dataset object or *_final.odc-metadata.yaml Path
 
-        product : str
-            Product name
+        sub_product: str
+            Sub-product name, e.g. "lmbskyg", "nbar", "nbart", "lambertian"
+
+        scale_factor: int or float
+            factor used to convert int16 to float32 (default = 10000)
+
+        fmask_file: Path or None
+            Path to fmask file
 
         Examples
         --------
@@ -72,7 +80,7 @@ class GlintCorr:
                 "dc_dataset must be a datacube.model.Dataset, pathlib.Path object or str"
             )
 
-        self.product = product
+        self.sub_product = sub_product
         self.meas_dict = self.get_meas_dict(metadata_dict)
         self.sensor = self.get_sensor(metadata_dict)
 
@@ -89,7 +97,7 @@ class GlintCorr:
         self.grid_dict = metadata_dict["grids"]
 
         # define the scale factor to convert to reflectance
-        self.scale_factor = 10000.0
+        self.scale_factor = scale_factor
 
         # get list of tif files from self.meas_dict
         self.band_list, self.band_ids, self.bandnames, self.bandres = self.get_band_list()
@@ -137,7 +145,7 @@ class GlintCorr:
         if not path.exists():
             raise Exception("\nError: {0} does not exist.".format(path))
 
-    def check_bandnum_exist(self, bandnums: list, required_bandnums: list):
+    def check_bandnum_exist(self, bandnums: List[str], required_bandnums: List[str]):
         """
         Checks if the band numbers in the required list exist
 
@@ -163,45 +171,56 @@ class GlintCorr:
                     )
                 )
 
-    def create_res_dict(self, vis_band_ids: list) -> dict:
+    def create_res_dict(self, vis_bands: List[str]) -> dict:
         """
         Create a dictionary that groups the input band
         paths based on their spatial resolutions
 
         Parameters
         ----------
-        vis_band_ids : list
+        vis_bands : list
             The list of visible bands that will be deglinted
 
         Returns
         -------
         res_ordered: dict
             A resolution ordered dictionary, e.g.
+
+            if S2A/B, vis_bands = ["1", "2", "3", "4", "5", "6"]
             res_ordered = {
                 10.0: {
-                    "blue": (2, Path(/path/to/blue.tif)),
-                    "green": (3, Path(/path/to/green.tif)),
-                    "red": (4, Path(/path/to/red.tif)),
+                    "blue": ("2", Path(/path/to/blue.tif)),
+                    "green": ("3", Path(/path/to/green.tif)),
+                    "red": ("4", Path(/path/to/red.tif)),
                 }
                 20.0: {
-                    "red_edge_1": (5, Path(/path/to/red_edge_1.tif)),
-                    "red_edge_2": (6, Path(/path/to/red_edge_2.tif)),
+                    "red_edge_1": ("5", Path(/path/to/red_edge_1.tif)),
+                    "red_edge_2": ("6", Path(/path/to/red_edge_2.tif)),
                 }
                 60.0: {
-                    "coastal_aerosol": (1, Path(/path/to/coastal_aerosol.tif)),
+                    "coastal_aerosol": ("1", Path(/path/to/coastal_aerosol.tif)),
+                }
+            }
+
+            if S2A/B, vis_bands = ["1"]
+            res_ordered = {
+                60.0: {
+                    "coastal_aerosol": ("1", Path(/path/to/coastal_aerosol.tif)
                 }
             }
 
         """
         # initialise a nested dictionary
         res_ordered = dict()
-        for res in self.bandres:
-            res_ordered[res] = dict()
+        # Get the resolution of the vis_bands
+        for visband in vis_bands:
+            ix_vis = self.band_ids.index(visband)
+            res_ordered[self.bandres[ix_vis]] = dict()
 
-        for z in range(0, len(vis_band_ids)):
-            ix_vis = self.band_ids.index(vis_band_ids[z])
+        for z in range(0, len(vis_bands)):
+            ix_vis = self.band_ids.index(vis_bands[z])
             res_ordered[self.bandres[ix_vis]][self.bandnames[ix_vis]] = (
-                vis_band_ids[z],
+                vis_bands[z],
                 self.band_list[ix_vis],
             )
 
@@ -284,18 +303,31 @@ class GlintCorr:
         sensor : str
             The sensor name
         """
+
+        def join_sensor(sensor_name):
+            # if sensor_name = "sentinel-2a" or "sentinel_2a"
+            # then the return is sentinel2a
+            if "_" in sensor_name:
+                return "".join(sensor_name.split("_"))
+
+            elif "-" in sensor_name:
+                return "".join(sensor_name.split("-"))
+
+            else:
+                return sensor_name
+
         msg = "Unable to extract sensor name"
         if "platform" in metadata_dict:
             # older version
             try:
-                sensor = metadata_dict["platform"]["code"].lower()
+                sensor = join_sensor(metadata_dict["platform"]["code"].lower())
             except KeyError:
                 raise Exception(f'{msg}, "code" not in metadata_dict["platform"]')
 
         elif "properties" in metadata_dict:
             # newer version
             try:
-                sensor = metadata_dict["properties"]["eo:platform"].lower()
+                sensor = join_sensor(metadata_dict["properties"]["eo:platform"].lower())
             except KeyError:
                 raise Exception(
                     f'{msg}, "eo:platform" not in metadata_dict["properties"]'
@@ -355,7 +387,7 @@ class GlintCorr:
 
         return overpass_datetime
 
-    def get_band_list(self):
+    def get_band_list(self) -> Tuple[List[str], List[str], List[str], List[str]]:
         """
         Get a list of tifs in from self.meas_dict
 
@@ -396,7 +428,7 @@ class GlintCorr:
         bandres = []
         for key in self.meas_dict.keys():
             key_spl = key.split("_")
-            if key_spl[0].find(self.product) != -1:
+            if key_spl[0].find(self.sub_product) != -1:
                 basename = self.meas_dict[key]["path"]
 
                 # skip over files that aren't needed for deglinting
@@ -461,7 +493,7 @@ class GlintCorr:
 
         return fmask_file
 
-    def quicklook_rgb(self, dwnscale_factor: float = 3):
+    def quicklook_rgb(self, dwnscale_factor: float = 3) -> Tuple[np.ndarray, dict]:
         """
         Generate a quicklook from the sensor's RGB bands
 
@@ -499,20 +531,20 @@ class GlintCorr:
             raise Exception("\ndwnscale_factor must be a float >= 1")
 
         if (
-            (self.sensor == "sentinel_2a")
-            or (self.sensor == "sentinel_2b")
-            or (self.sensor == "landsat-8")
+            (self.sensor == "sentinel2a")
+            or (self.sensor == "sentinel2b")
+            or (self.sensor == "landsat8")
         ):
             ix_red = self.band_ids.index("4")
             ix_grn = self.band_ids.index("3")
             ix_blu = self.band_ids.index("2")
 
-        if (self.sensor == "landsat-5") or (self.sensor == "landsat-7"):
+        if (self.sensor == "landsat5") or (self.sensor == "landsat7"):
             ix_red = self.band_ids.index("3")
             ix_grn = self.band_ids.index("2")
             ix_blu = self.band_ids.index("1")
 
-        if self.sensor == "worldview-2":
+        if self.sensor == "worldview2":
             ix_red = self.band_ids.index("5")
             ix_grn = self.band_ids.index("3")
             ix_blu = self.band_ids.index("2")
@@ -598,16 +630,15 @@ class GlintCorr:
         # close the RoiSelector
         mc = None
 
-    def nir_subtraction(
+    def glint_subtraction(
         self,
-        vis_band_ids: list,
-        nir_band_id: list,
+        vis_bands: List[str],
+        corr_band: str,
         water_val: int = 5,
-        odir: Optional[Path] = None,
-    ) -> list:
+    ) -> List[xr.Dataset]:
         """
         This sunglint correction assumes that glint reflectance
-        is nearly spectrally flat in the VIS-NIR. Hence, the NIR
+        is nearly spectrally flat in the VIS-NIR. Hence, the NIR/SWIR
         reflectance is subtracted from the VIS bands.
 
         Dierssen, H.M., Chlus, A., Russell, B. 2015. Hyperspectral
@@ -619,20 +650,14 @@ class GlintCorr:
 
         Parameters
         ----------
-        vis_band_ids : list
+        vis_bands : list
             A list of band numbers in the visible that will be deglinted
 
-        nir_band_id : str
-            The NIR band number used to deglint the VIS bands in vis_band_ids
+        corr_band : str
+            The NIR/SWIR band number used to deglint the VIS bands in vis_bands
 
         water_val : int
             The fmask value for water pixels (default = 5)
-
-        odir : str
-            The path where the deglinted geotiff bands are saved.
-
-            if None then:
-            odir = self.group_path / "DEGLINT" / "MINUS_NIR"
 
         Returns
         -------
@@ -652,25 +677,19 @@ class GlintCorr:
             * If any of the bands do not exist
             * If any of the input data only contains nodata
         """
-        # create output directory
-        if not odir:
-            odir = self.group_path / "DEGLINT" / "MINUS_NIR"
-
-        if not odir.exists:
-            odir.mkdir(exist_ok=True)
 
         # Check that the input vis bands exist
-        self.check_bandnum_exist(self.band_ids, vis_band_ids)
-        self.check_bandnum_exist(self.band_ids, [nir_band_id])
+        self.check_bandnum_exist(self.band_ids, vis_bands)
+        self.check_bandnum_exist(self.band_ids, [corr_band])
 
-        ix_nir = self.band_ids.index(nir_band_id)
-        nir_bandpath = self.band_list[ix_nir]  # Path
+        ix_corr = self.band_ids.index(corr_band)
+        corr_bandpath = self.band_list[ix_corr]  # Path
 
         # ------------------------------ #
         # Group the input bands based on #
         #    their spatial resolution    #
         # ------------------------------ #
-        res_ordered_vis = self.create_res_dict(vis_band_ids)  # dict
+        res_ordered_vis = self.create_res_dict(vis_bands)  # dict
 
         # ------------------------------ #
         #  Iterate over all spatial res. #
@@ -709,7 +728,7 @@ class GlintCorr:
 
                         # Resample NIR/SWIR band
                         nir_im = rio_funcs.resample_file_to_ds(
-                            nir_bandpath, ds_vis, Resampling.bilinear
+                            corr_bandpath, ds_vis, Resampling.bilinear
                         )
 
                         rio_funcs.check_image_singleval(nir_im, nodata, "nir_im")
@@ -728,7 +747,7 @@ class GlintCorr:
                 deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
 
                 # add 3D array (1, nrows, ncols) to xarray dict.
-                data_varname = "{0}_{1}_subtract_deglint".format(self.product, bname)
+                data_varname = "{0}_{1}_subtract_deglint".format(self.sub_product, bname)
                 xr_dvars[data_varname] = (
                     ["time", "y", "x"],
                     deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
@@ -739,7 +758,7 @@ class GlintCorr:
                 xr_dvars,
                 vis_meta,
                 self.overpass_datetime,
-                f"deglinted {self.product} bands {res} via NIR/SWIR subtraction",
+                f"deglinted {self.sub_product} bands {res} via NIR/SWIR subtraction",
             )
 
             dxr_list.append(dxr)
@@ -749,14 +768,14 @@ class GlintCorr:
 
     def hedley_2005(
         self,
-        vis_band_ids: list,
-        nir_band_id: list,
+        vis_bands: List[str],
+        corr_band: List[str],
         water_val: int = 5,
         overwrite_shp: bool = False,
         plot: bool = False,
         roi_shpfile: Optional[Path] = None,
         odir: Optional[Path] = None,
-    ):
+    ) -> List[xr.Dataset]:
         """
         Sunglint correction using the algorithm:
         Hedley, J. D., Harborne, A. R., Mumby, P. J. (2005). Simple and
@@ -765,11 +784,11 @@ class GlintCorr:
 
         Parameters
         ----------
-        vis_band_ids : list
+        vis_bands : list
             A list of band numbers in the visible that will be deglinted
 
-        nir_band_id : str
-            The NIR band number used to deglint the VIS bands in vis_band_ids
+        corr_band : str
+            The NIR/SWIR band number used to deglint the VIS bands in vis_bands
 
         water_val : int
             The fmask value for water pixels (default = 5)
@@ -790,16 +809,16 @@ class GlintCorr:
             contaminated pixels
 
         odir : str
-            The path where the deglinted geotiff bands
-            and correlation plots (if specified) are saved.
+            The path where the correlation plots (if specified) are saved.
 
             if None then:
             odir = self.group_path / "DEGLINT" / "HEDLEY"
 
         Returns
         -------
-        deglint_bandlist : list
-            A list of paths to the deglinted geotiff bands
+        dxr_list : list
+            A list of xarrays, where each xarray contains
+            deglinted bands of the same resolution
 
         Notes
         -----
@@ -847,17 +866,17 @@ class GlintCorr:
             fig, ax = plt.subplots(nrows=1, ncols=1)
 
         # Check that the input vis bands exist
-        self.check_bandnum_exist(self.band_ids, vis_band_ids)
-        self.check_bandnum_exist(self.band_ids, [nir_band_id])
+        self.check_bandnum_exist(self.band_ids, vis_bands)
+        self.check_bandnum_exist(self.band_ids, [corr_band])
 
-        ix_nir = self.band_ids.index(nir_band_id)
-        nir_bandpath = self.band_list[ix_nir]  # Path
+        ix_corr = self.band_ids.index(corr_band)
+        corr_bandpath = self.band_list[ix_corr]  # Path
 
         # ------------------------------ #
         # Group the input bands based on #
         #    their spatial resolution    #
         # ------------------------------ #
-        res_ordered_vis = self.create_res_dict(vis_band_ids)  # dict
+        res_ordered_vis = self.create_res_dict(vis_bands)  # dict
 
         # ------------------------------ #
         #  Iterate over all spatial res. #
@@ -896,7 +915,7 @@ class GlintCorr:
 
                         # Resample NIR/SWIR band
                         nir_im = rio_funcs.resample_file_to_ds(
-                            nir_bandpath, ds_vis, Resampling.bilinear
+                            corr_bandpath, ds_vis, Resampling.bilinear
                         )
 
                         rio_funcs.check_image_singleval(nir_im, nodata, "nir_im")
@@ -932,7 +951,7 @@ class GlintCorr:
                 deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
 
                 # 4. add 3D array (1, nrows, ncols) to xarray dict.
-                data_varname = "{0}_{1}_hedley_deglint".format(self.product, bname)
+                data_varname = "{0}_{1}_hedley_deglint".format(self.sub_product, bname)
                 xr_dvars[data_varname] = (
                     ["time", "y", "x"],
                     deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
@@ -943,7 +962,7 @@ class GlintCorr:
                 xr_dvars,
                 vis_meta,
                 self.overpass_datetime,
-                f"deglinted {self.product} bands {res} via Cox and Munk (1954)",
+                f"deglinted {self.sub_product} bands {res} via Cox and Munk (1954)",
             )
 
             dxr_list.append(dxr)
@@ -960,7 +979,7 @@ class GlintCorr:
                     nir_vals=valid_nir,
                     vis_vals=y_vals,
                     scale_factor=self.scale_factor,
-                    nir_band_id=nir_band_id,
+                    nir_band_id=corr_band,
                     vis_band_id=res_ordered_vis[res][bname][0],
                     odir=odir,
                 )
@@ -970,14 +989,13 @@ class GlintCorr:
 
     def cox_munk(
         self,
-        vis_band_ids: list,
-        odir: Union[Path, None] = None,
+        vis_bands: List[str],
         vzen_file: Union[Path, None] = None,
         szen_file: Union[Path, None] = None,
         razi_file: Union[Path, None] = None,
         wind_speed: float = 5,
         water_val: int = 5,
-    ):
+    ) -> List[xr.Dataset]:
         """
         Performs the wind-direction-independent Cox and Munk (1954)
         sunglint correction on the specified visible bands. This
@@ -999,14 +1017,8 @@ class GlintCorr:
 
         Parameters
         ----------
-        vis_band_ids : list
+        vis_bands : list
             A list of band numbers in the visible that will be deglinted
-
-        odir : Path or None
-            The path where the deglinted geotiff bands are saved.
-
-            if None then:
-            odir = self.group_path / "DEGLINT" / "COX_MUNK"
 
         vzen_file : Path or None
             sensor view zenith (rasterio-openable) image file
@@ -1035,8 +1047,9 @@ class GlintCorr:
 
         Returns
         -------
-        deglint_bandlist : list
-            A list of paths to the deglinted geotiff bands
+        dxr_list : list
+            A list of xarrays, where each xarray contains
+            deglinted bands of the same resolution
 
         Raises
         ------
@@ -1046,13 +1059,6 @@ class GlintCorr:
             * if dimension mismatch
             * if wind_speed < 0
         """
-        # create output directory
-        if not odir:
-            odir = self.group_path / "DEGLINT" / "COX_MUNK"
-
-        if not odir.exists():
-            os.makedirs(odir, exist_ok=True)
-
         # --- check vzen_file --- #
         if vzen_file:
             self.check_path_exists(vzen_file)
@@ -1075,17 +1081,26 @@ class GlintCorr:
             razi_file = self.find_file("relative_azimuth")
 
         # Check that the input vis bands exist
-        self.check_bandnum_exist(self.band_ids, vis_band_ids)
+        self.check_bandnum_exist(self.band_ids, vis_bands)
 
         # ------------------------------- #
         #  Estimate sunglint reflectance  #
         # ------------------------------- #
+        vzen_im, vzen_meta = rio_funcs.load_singleband(vzen_file)
+        szen_im, szen_meta = rio_funcs.load_singleband(szen_file)
+        razi_im, razi_meta = rio_funcs.load_singleband(razi_file)
+
+        # for these arrays, nodata = np.nan
+        rio_funcs.check_image_singleval(vzen_im, vzen_meta["nodata"], "view_zenith")
+        rio_funcs.check_image_singleval(szen_im, szen_meta["nodata"], "solar_zenith")
+        rio_funcs.check_image_singleval(razi_im, razi_meta["nodata"], "relative_azimuth")
+        cm_meta = szen_meta.copy()
 
         # cox and munk:
-        p_glint, p_fresnel, cm_meta = cm_sunglint(
-            view_zenith_file=vzen_file,
-            solar_zenith_file=szen_file,
-            relative_azimuth_file=razi_file,
+        p_glint, p_fresnel = cm_sunglint(
+            view_zenith=vzen_im,
+            solar_zenith=szen_im,
+            relative_azimuth=razi_im,
             wind_speed=wind_speed,
             return_fresnel=False,
         )
@@ -1094,7 +1109,6 @@ class GlintCorr:
 
         p_nodata = cm_meta["nodata"]  # this is np.nan
 
-        psg_nrows, psg_ncols = p_glint.shape
         # Notes:
         #    * if return_fresnel=True  then p_fresnel = numpy.ndarray
         #    * if return_fresnel=False then p_fresnel = None
@@ -1110,7 +1124,7 @@ class GlintCorr:
         # Group the input bands based on #
         #    their spatial resolution    #
         # ------------------------------ #
-        res_ordered_vis = self.create_res_dict(vis_band_ids)  # dict
+        res_ordered_vis = self.create_res_dict(vis_bands)  # dict
 
         # ------------------------------ #
         #  Iterate over all spatial res. #
@@ -1171,7 +1185,7 @@ class GlintCorr:
                 deglint_band[water_msk] = vis_im[water_msk] - p_glint_res[water_msk]
 
                 # add 3D array (1, nrows, ncols) to xarray dict.
-                data_varname = "{0}_{1}_cox_munk_deglint".format(self.product, bname)
+                data_varname = "{0}_{1}_cox_munk_deglint".format(self.sub_product, bname)
                 xr_dvars[data_varname] = (
                     ["time", "y", "x"],
                     deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
@@ -1182,7 +1196,7 @@ class GlintCorr:
                 xr_dvars,
                 vis_meta,
                 self.overpass_datetime,
-                f"deglinted {self.product} bands {res} via Cox and Munk (1954)",
+                f"deglinted {self.sub_product} bands {res} via Cox and Munk (1954)",
             )
 
             dxr_list.append(dxr)

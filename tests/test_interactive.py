@@ -19,8 +19,8 @@ odc_meta_file = (
     / "data/ga_ls8c_aard_3-2-0_091086_2014-11-06_final.odc-metadata.yaml"
 )
 
-# specify the product
-product = "lmbadj"
+# specify the sub_product
+sub_product = "lmbadj"
 
 
 def test_interactive_figure():
@@ -32,7 +32,7 @@ def test_interactive_figure():
     Note that the unittest on g.quicklook_rgb() is performed in
     test_quicklook_rgb.py
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     # generate a quicklook
     rgb_im, rgb_meta = g.quicklook_rgb(dwnscale_factor=3)
@@ -45,7 +45,7 @@ def test_interactive_figure():
     mc.interative()
 
     # Ensure that mc.canvas is the correct type.
-    assert isinstance(mc.canvas, backend_qt5agg.FigureCanvasQTAgg)
+    assert isinstance(mc.canvas, backend_qt5agg.FigureCanvasAgg)
 
 
 def test_interactive_failure():
