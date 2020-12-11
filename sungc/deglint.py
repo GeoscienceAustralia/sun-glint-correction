@@ -94,7 +94,7 @@ class GlintCorr:
         self.check_sensor()
 
         # write code that extracts the grid_dict
-        self.grid_dict = metadata_dict["grids"]
+        self.res_dict = self.create_band_res_dict(metadata_dict)
 
         # define the scale factor to convert to reflectance
         self.scale_factor = scale_factor
@@ -171,7 +171,47 @@ class GlintCorr:
                     )
                 )
 
-    def create_res_dict(self, vis_bands: List[str]) -> dict:
+    def create_band_res_dict(self, metadata_dict: dict) -> dict:
+        """
+        Create a dictionary that contains the spatial
+        resolution for each band present in self.meas_dict.
+
+        Parameters
+        ----------
+        metadata_dict : dict
+            metadata dictionary
+
+        Returns
+        -------
+        band_res : dict
+            e.g. if S2A/B
+            {
+                'nbar_blue': 10.0,
+                'nbar_coastal_aerosol': 60.0,
+                'nbar_contiguity': 20.0,
+            }
+        """
+        if "grids" in metadata_dict:
+            # new style metadata document
+            grid_dict = metadata_dict["grids"]
+            res_dict = dict()
+            for bname in self.meas_dict:
+                if "grid" in self.meas_dict[bname]:
+                    gridname = self.meas_dict[bname]["grid"]
+                else:
+                    gridname = "default"
+
+                res_dict[bname] = grid_dict[gridname]["transform"][0]
+
+        else:
+            # old style metadata document
+            res_dict = dict()
+            for bname in self.meas_dict:
+                res_dict[bname] = self.meas_dict[bname]["info"]["geotransform"][1]
+
+        return res_dict
+
+    def create_res_ordered_metad(self, vis_bands: List[str]) -> dict:
         """
         Create a dictionary that groups the input band
         paths based on their spatial resolutions
@@ -435,15 +475,8 @@ class GlintCorr:
                 if basename.lower() in skip_bands:
                     continue
 
-                if "grid" in self.meas_dict[key]:
-                    grid_name = self.meas_dict[key]["grid"]
-                else:
-                    # grid not present in the meas_dict. This
-                    # typically occurs for the default grid
-                    grid_name = "default"
-
-                # using the grid_name, get the spatial resolution
-                bandres.append(self.grid_dict[grid_name]["transform"][0])
+                # using the band name and res_dict, get the spatial resolution
+                bandres.append(self.res_dict[key])
 
                 # Get the resolution from the grid_dict
                 bfile = self.group_path.joinpath(basename)
@@ -689,7 +722,7 @@ class GlintCorr:
         # Group the input bands based on #
         #    their spatial resolution    #
         # ------------------------------ #
-        res_ordered_vis = self.create_res_dict(vis_bands)  # dict
+        res_ordered_vis = self.create_res_ordered_metad(vis_bands)  # dict
 
         # ------------------------------ #
         #  Iterate over all spatial res. #
@@ -876,7 +909,7 @@ class GlintCorr:
         # Group the input bands based on #
         #    their spatial resolution    #
         # ------------------------------ #
-        res_ordered_vis = self.create_res_dict(vis_bands)  # dict
+        res_ordered_vis = self.create_res_ordered_metad(vis_bands)  # dict
 
         # ------------------------------ #
         #  Iterate over all spatial res. #
@@ -1124,7 +1157,7 @@ class GlintCorr:
         # Group the input bands based on #
         #    their spatial resolution    #
         # ------------------------------ #
-        res_ordered_vis = self.create_res_dict(vis_bands)  # dict
+        res_ordered_vis = self.create_res_ordered_metad(vis_bands)  # dict
 
         # ------------------------------ #
         #  Iterate over all spatial res. #
