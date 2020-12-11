@@ -31,8 +31,8 @@ odc_meta_file = data_path / "ga_ls8c_aard_3-2-0_091086_2014-11-06_final.odc-meta
 
 shp_file = data_path / "HEDLEY" / "ga_ls8c_oa_3-2-0_091086_2014-11-06_final_dw_ROI.shp"
 
-# specify the product
-product = "lmbadj"
+# specify the sub_product
+sub_product = "lmbadj"
 
 
 def test_hedley_image(tmp_path):
@@ -40,7 +40,7 @@ def test_hedley_image(tmp_path):
     Test if the generated deglinted band is nearly identical
     to expected deglinted band
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
     hedley_dir = tmp_path / "HEDLEY"
     hedley_dir.mkdir()
 
@@ -49,8 +49,8 @@ def test_hedley_image(tmp_path):
     # ------------------ #
     # deglint the vis bands using band 6
     hedley_xarrlist = g.hedley_2005(
-        vis_band_ids=["3"],
-        nir_band_id="6",
+        vis_bands=["3"],
+        corr_band="6",
         roi_shpfile=shp_file,
         overwrite_shp=False,
         odir=hedley_dir,
@@ -85,10 +85,10 @@ def test_hedley_plot(tmp_path):
     hedley_dir = tmp_path / "HEDLEY"
     hedley_dir.mkdir()
 
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
     g.hedley_2005(
-        vis_band_ids=["3"],
-        nir_band_id="6",
+        vis_bands=["3"],
+        corr_band="6",
         roi_shpfile=shp_file,
         overwrite_shp=False,
         odir=hedley_dir,
@@ -106,9 +106,9 @@ def test_hedley_plot(tmp_path):
 def test_hedley_bands(tmp_path):
     """
     Ensure that hedley_2005() raises an Exception if
-    the specifued vis_band_id and nir_band_id do not exist
+    the specifued vis_band_id and corr_band do not exist
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     hedley_dir = tmp_path / "HEDLEY"
     hedley_dir.mkdir()
@@ -116,8 +116,8 @@ def test_hedley_bands(tmp_path):
     # check VIS band
     with pytest.raises(Exception) as excinfo:
         g.hedley_2005(
-            vis_band_ids=["20"],  # this band doesn't exist
-            nir_band_id="6",
+            vis_bands=["20"],  # this band doesn't exist
+            corr_band="6",
             roi_shpfile=shp_file,
             overwrite_shp=False,
             odir=hedley_dir,
@@ -129,8 +129,8 @@ def test_hedley_bands(tmp_path):
     # check NIR band
     with pytest.raises(Exception) as excinfo:
         g.hedley_2005(
-            vis_band_ids=["3"],
-            nir_band_id="20",  # this band doesn't exist
+            vis_bands=["3"],
+            corr_band="20",  # this band doesn't exist
             roi_shpfile=shp_file,
             overwrite_shp=False,
             odir=hedley_dir,
@@ -145,15 +145,15 @@ def test_empty_band(tmp_path):
     Ensure that hedley_2005() raises an Exception if
     the VIS and NIR band only contain nodata pixels
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     hedley_dir = tmp_path / "HEDLEY"
     hedley_dir.mkdir()
 
     with pytest.raises(Exception) as excinfo:
         g.hedley_2005(
-            vis_band_ids=["7"],  # dummy band only contains nodata (-999)
-            nir_band_id="6",
+            vis_bands=["7"],  # dummy band only contains nodata (-999)
+            corr_band="6",
             roi_shpfile=shp_file,
             overwrite_shp=False,
             odir=hedley_dir,
@@ -164,8 +164,8 @@ def test_empty_band(tmp_path):
 
     with pytest.raises(Exception) as excinfo:
         g.hedley_2005(
-            vis_band_ids=["3"],
-            nir_band_id="7",  # dummy band only contains nodata (-999)
+            vis_bands=["3"],
+            corr_band="7",  # dummy band only contains nodata (-999)
             roi_shpfile=shp_file,
             overwrite_shp=False,
             odir=hedley_dir,
@@ -180,7 +180,7 @@ def test_fake_shp(tmp_path):
     Ensure that hedley_2005() raises an Exception if
     the input shapefile isn't really a shapefile
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     hedley_dir = tmp_path / "HEDLEY"
     hedley_dir.mkdir()
@@ -191,8 +191,8 @@ def test_fake_shp(tmp_path):
 
     with pytest.raises(Exception) as excinfo:
         g.hedley_2005(
-            vis_band_ids=["3"],
-            nir_band_id="6",
+            vis_bands=["3"],
+            corr_band="6",
             roi_shpfile=fake_shp,
             overwrite_shp=False,
             odir=hedley_dir,
@@ -207,7 +207,7 @@ def test_failure_point_shp(tmp_path):
     Ensure that hedley_2005() raises an Exception if
     the shapefile does not contain any Polygon geometries
     """
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     hedley_dir = tmp_path / "HEDLEY"
     hedley_dir.mkdir()
@@ -239,8 +239,8 @@ def test_failure_point_shp(tmp_path):
             )
     with pytest.raises(Exception) as excinfo:
         g.hedley_2005(
-            vis_band_ids=["3"],
-            nir_band_id="6",
+            vis_bands=["3"],
+            corr_band="6",
             roi_shpfile=point_shp,
             overwrite_shp=False,
             odir=hedley_dir,
@@ -270,8 +270,8 @@ def test_failure_point_shp(tmp_path):
         )
     with pytest.raises(Exception) as excinfo:
         g.hedley_2005(
-            vis_band_ids=["3"],
-            nir_band_id="6",
+            vis_bands=["3"],
+            corr_band="6",
             roi_shpfile=linestr_shp,
             overwrite_shp=False,
             odir=hedley_dir,
