@@ -50,7 +50,7 @@ def create_xr(
     )
 
     xr_attrs = dict(
-        description=desc,
+        deglint_algorithm=desc,
         spatial_res=meta["transform"][0],
         transform=meta["transform"],
         crs=meta["crs"],
