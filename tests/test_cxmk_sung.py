@@ -14,7 +14,7 @@ import numpy as np
 
 from pathlib import Path
 from sungc import deglint
-from sungc.cox_munk_funcs import cm_sunglint
+from sungc.algorithms import coxmunk_backend
 from sungc.rasterio_funcs import load_singleband
 
 from . import urd, create_halved_band
@@ -44,7 +44,7 @@ def test_cxmk_image():
         water_val=5,
     )
 
-    sungc_band = cxmk_xarrlist[0].lmbadj_green_cox_munk_deglint.values  # 3D array
+    sungc_band = cxmk_xarrlist[0].lmbadj_green.values  # 3D array
 
     # path to expected sunglint corrected output from NIR subtraction
     exp_sungc_band = (
@@ -84,7 +84,7 @@ def test_glint_images():
     cm_meta = vzen_meta.copy()
 
     # cox and munk:
-    p_glint, p_fresnel = cm_sunglint(
+    p_glint, p_fresnel = coxmunk_backend(
         view_zenith=vzen_im,
         solar_zenith=szen_im,
         relative_azimuth=razi_im,
