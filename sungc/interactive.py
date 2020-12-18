@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
 
-import sys
+"""
+ CODE THAT ALLOWS THE USER TO INTERACTIVELY
+        SELECT A ROI FROM IMAGERY
+"""
 import fiona
 import rasterio
 import numpy as np
 import matplotlib
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 
+from pathlib import Path
 from typing import Optional, Union
 from shapely import geometry
 from matplotlib import patches
 from PIL import Image, ImageDraw
-
-"""
-## --------------------------------------------------- ##
-## --------------------------------------------------- ##
-##     CODE THAT ALLOWS THE USER TO INTERACTIVELY      ##
-##            SELECT A ROI FROM IMAGERY                ##
-## --------------------------------------------------- ##
-## --------------------------------------------------- ##
-"""
 
 
 class RoiSelector(object):
@@ -28,7 +24,8 @@ class RoiSelector(object):
 
     Parameters
     ----------
-    ax: matplotlib.axes.Axes
+    rgb_im: np.ndarray
+        RGB image with dimensions of [nrows, ncols, 3]
 
     poly_xy : list of (float, float)
         List of (x, y) coordinates used as vertices of the polygon.
@@ -49,32 +46,54 @@ class RoiSelector(object):
 
     def __init__(
         self,
-        ax: matplotlib.axes.Axes,
+        rgb_im: np.ndarray,
         poly_xy: Optional[Union[list, tuple, None]] = None,
         max_ds: Optional[Union[int, float]] = 10,
     ):
-        self.showverts = True
-        self.max_ds = max_ds
-        self.ax = ax
-        self.poly_xy = poly_xy
 
-        if not isinstance(ax, matplotlib.axes.Axes):
-            raise Exception("ax in RoiSelector must be matplotlib.axes.Axes")
+        # --- check rgb_im --- #
+        if not isinstance(rgb_im, np.ndarray):
+            raise ValueError("rgb_im is not an np.ndarray")
 
+        if rgb_im.ndim != 3:
+            raise ValueError("rgb_im np.ndarray is not 3-dimensional")
+
+        if rgb_im.shape[-1] != 3:
+            raise ValueError(f"last dimension of rgb_im != 3 ({rgb_im.shape})")
+
+        # --- check max_ds --- #
         if not isinstance(max_ds, (float, int)):
-            raise Exception("max_ds in RoiSelector must be int or float")
+            raise ValueError("max_ds in RoiSelector must be int or float")
 
+        if max_ds <= 0:
+            raise ValueError("max_ds in RoiSelector must be > 0")
+
+        # --- check poly_xy --- #
         if not isinstance(poly_xy, (list, tuple, type(None))):
-            raise Exception("poly_xy in RoiSelector must be a list, tuple or None")
+            raise ValueError("poly_xy in RoiSelector must be a list, tuple or None")
 
         if isinstance(poly_xy, (list, tuple)):
             # poly_xy contains the vertices of a polygon. The smallest
             # polygon possible is a triangle, hence nVertices >= 3
             if len(poly_xy) < 3:
-                raise Exception("input ploy_xy in RoiSelector must have >= 3 vertices")
+                raise ValueError("input ploy_xy in RoiSelector must have >= 3 vertices")
 
-        if max_ds <= 0:
-            raise Exception("max_ds in RoiSelector must be > 0")
+        # --- all good --- #
+        self.ax = self.display_image(rgb_im)
+        self.poly_xy = poly_xy
+        self.max_ds = max_ds
+        self.showverts = True
+
+    def display_image(self, img: np.ndarray) -> matplotlib.axes.Axes:
+        """
+        Displays a np.ndarray (image)
+        """
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        ax.axis("off")
+        ax.imshow(img, interpolation="None", cmap=cm.jet)
+
+        fig.subplots_adjust(left=0, right=1, top=0.85, bottom=0)
+        return ax
 
     def interative(self):
 
@@ -113,8 +132,9 @@ class RoiSelector(object):
         canvas.mpl_connect("key_press_event", self.key_press_callback)
         canvas.mpl_connect("motion_notify_event", self.motion_notify_callback)
         self.canvas = canvas
+        plt.show()
 
-    def default_vertices(self, ax):
+    def default_vertices(self, ax: matplotlib.axes.Axes) -> tuple:
         """
         Default to rectangle that has a quarter-width/height border.
         """
@@ -127,7 +147,7 @@ class RoiSelector(object):
 
         return ((x1, y1), (x1, y2), (x2, y2), (x2, y1))
 
-    def verts_to_shp(self, metadata, shp_file):
+    def verts_to_shp(self, metadata: dict, shp_file: Union[Path, str]):
         """
         Save the user-selected polygon vertices to
         an ascii file.
@@ -137,7 +157,7 @@ class RoiSelector(object):
         metadata : dict()
             A rasterio dictionary containing image metadata
 
-        shp_file : str
+        shp_file : Path or str
             shapefile that will contain the vertices of a polygon
         """
         poly_coords = []
@@ -154,7 +174,9 @@ class RoiSelector(object):
         schema = {"geometry": "Polygon", "properties": {"id": "str"}}
 
         # Write a new Shapefile
-        with fiona.open(shp_file, "w", "ESRI Shapefile", schema) as c:
+        with fiona.open(
+            shp_file, "w", crs=metadata["crs"], driver="ESRI Shapefile", schema=schema
+        ) as c:
             c.write(
                 {
                     "geometry": geometry.mapping(geometry.Polygon(poly_coords)),
@@ -162,22 +184,7 @@ class RoiSelector(object):
                 }
             )
 
-    def verts_from_shp(self, shp_file):
-        """
-        Load polygon vertices from a shapefile
-
-        Parameters
-        ----------
-        shp_file: str
-            shapefile that contains a polygon
-        """
-        with fiona.open(shp_file, "r") as shapefile:
-            shapes = [feature["geometry"] for feature in shapefile]
-
-        print(shapes)
-        sys.exit()
-
-    def get_mask(self, shape):
+    def get_mask(self, shape: tuple) -> np.ndarray:
         """Return image mask given by mask creator"""
         h, w = shape
         # The original code imported nxutils from matplotlib.
@@ -193,14 +200,14 @@ class RoiSelector(object):
         ImageDraw.Draw(img).polygon(polygon, outline=1, fill=1)
         return np.array(img, order="C", dtype=np.uint8)
 
-    def poly_changed(self, poly):
+    def poly_changed(self, poly: Union[list, tuple]):
         "this method is called whenever the polygon object is called"
         # only copy the artist props to the line (except visibility)
         vis = self.line.get_visible()
         # Artist.update_from(self.line, poly)
         self.line.set_visible(vis)  # don't use the poly visibility state
 
-    def dist(self, x, y):
+    def dist(self, x: Union[float, int], y: Union[float, int]) -> float:
         """
         Return the euclidean distance between two points.
 
@@ -210,7 +217,9 @@ class RoiSelector(object):
         d = x - y
         return (np.dot(d, d)) ** 0.5
 
-    def dist_point_to_segment(self, p, s0, s1):
+    def dist_point_to_segment(
+        self, p: Union[list, tuple], s0: Union[list, tuple], s1: Union[list, tuple]
+    ) -> float:
         """
         Get the distance of a point to a segment.
           *p*, *s0*, *s1* are *xy* sequences
@@ -327,7 +336,7 @@ class RoiSelector(object):
         self.last_vert_ind = len(self.poly.xy) - 1
         self.line.set_data(zip(*self.poly.xy))
 
-    def get_ind_under_cursor(self, event):
+    def get_ind_under_cursor(self, event) -> Union[int, None]:
         "get the index of the vertex under cursor if within max_ds tolerance"
         # display coords
         xy = np.asarray(self.poly.xy)
