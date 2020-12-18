@@ -2,23 +2,21 @@
 
 import os
 import yaml
+import tempfile
 import rasterio
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 
-from scipy import stats
 from pathlib import Path
 from datetime import datetime
 from datacube.model import Dataset
 from rasterio.warp import Resampling
 from typing import Optional, Union, List, Tuple
 
-import sungc.rasterio_funcs as rio_funcs
+import sungc.rasterio_funcs as rf
 from sungc.xarr_funcs import create_xr
-from sungc.interactive import RoiSelector
-from sungc.cox_munk_funcs import cm_sunglint
-from sungc.visualise import seadas_style_rgb, plot_correlations, display_image
+from sungc.algorithms import subtract_backend, coxmunk_backend, hedley_backend
 
 SUPPORTED_SENSORS = [
     "sentinel2a",
@@ -30,7 +28,552 @@ SUPPORTED_SENSORS = [
 ]
 
 
+class GlintCorrX:
+    """
+    xarray version of GlintCorr
+    """
+
+    def __init__(
+        self,
+        xarr: xr.Dataset,
+        scale_factor: Union[int, float] = 10000.0,
+    ):
+        """
+        Initiate the sunglint correction class for xarray inputs
+
+        Parameters
+        ----------
+        xarr: xr.Dataset
+            xarray object containing resampled bands all at the
+            same spatial resolution.
+
+        scale_factor: int or float
+            factor used to convert int16 to float32 (default = 10000)
+        """
+        if not isinstance(xarr, xr.Dataset):
+            raise ValueError("input xarr must be xarray.Dataset")
+
+        self.xarr = xarr
+        self.scale_factor = scale_factor
+        self.ntime = self.xarr.dims["time"]
+        self.nrows = self.xarr.dims["y"]
+        self.ncols = self.xarr.dims["x"]
+
+    def check_bands_in_xarr(self, input_bands: List[str]):
+        """
+        Check if all of the data variable names in input_bands
+        exist in the xarray. If any of the variable names do
+        not exist then a ValueError is raised.
+        """
+        if not all([varname in self.xarr.data_vars for varname in input_bands]):
+            raise ValueError(
+                f"One or more variable data names ({input_bands}) "
+                "specified do not exist in the xarray"
+            )
+
+    def check_roi_shplist(self, roi_shplist: Union[List[Path], List[str]]):
+        """ Check roi_shplist """
+        # check if numb in list = ntime
+        if len(roi_shplist) != self.ntime:
+            raise ValueError(
+                f"number of shapefiles in list ({len(roi_shplist)}) "
+                f"!= number of timestamps ({self.ntime})"
+            )
+
+        # ensure roi_shplist contains the correct input type
+        shp_type_check = [isinstance(shp_, (Path, str)) for shp_ in roi_shplist]
+        if not all(shp_type_check):
+            raise ValueError(
+                "roi_shplist contains elements that are not pathlib.Path or str objects."
+            )
+
+        # ensure all shapefiles in roi_shplist exist
+        roi_exist_check = [Path(shp_).exists() for shp_ in roi_shplist]
+        if not all(roi_exist_check):
+            raise ValueError("roi_shplist contains shapefiles that do not exist.")
+
+    def glint_subtraction(
+        self,
+        vis_bands: List[str],
+        corr_band: str,
+    ) -> xr.Dataset:
+        """
+        This sunglint correction assumes that glint reflectance
+        is nearly spectrally flat in the VIS-NIR. Hence, the NIR
+        or SWIR reflectance is subtracted from the VIS bands.
+
+        Dierssen, H.M., Chlus, A., Russell, B. 2015. Hyperspectral
+        discrimination of floating mats of seagrass wrack and the
+        macroalgae Sargassum in coastal waters of Greater Florida
+        Bay using airborne remote sensing. Remote Sens. Environ.,
+        167(15), 247-258, doi: https://doi.org/10.1016/j.rse.2015.01.027
+
+
+        Parameters
+        ----------
+        vis_bands : list
+            A list of data variable names present in the xarray for
+            the visible bands that will be deglinted.
+
+        corr_band : str
+            The variable name in the xarray for the NIR/SWIR band
+            that will be used to deglint the VIS bands.
+
+        Returns
+        -------
+        deglinted_dxr : xarray.Dataset
+            xarray object containing the deglinted vis_bands
+
+        Raises
+        ------
+        ValueError
+            * If any of the input variable names do not exist
+
+        Notes
+        -----
+        It is assumed that all bands in the xarray have the
+        spatial resolution and that non-water pixels have
+        already been masked.
+        """
+        # first we need to check if the variable names in
+        # vis_bands and corr_band exist in the xarray
+        self.check_bands_in_xarr(vis_bands)
+        self.check_bands_in_xarr([corr_band])
+
+        # get the nir/swir band
+        corr_im = self.xarr.variables[corr_band].values  # np.ndarray
+
+        xr_dvars = {}
+
+        for visname in vis_bands:
+            vis_im = self.xarr.variables[visname].values
+            nodata = self.xarr.variables[visname].attrs["nodata"]
+            dtype = self.xarr.variables[visname].dtype  # <class 'numpy.dtype'>
+
+            deglinted_im = np.zeros(
+                [self.ntime, self.nrows, self.ncols], order="C", dtype=dtype
+            )
+
+            success_bands = []
+            # iterate through time and deglint
+            for t in range(self.ntime):
+                water_mask = (vis_im[t, :, :] != nodata) & (corr_im[t, :, :] != nodata)
+
+                # check for nodata/empty arrays:
+                if rf.check_singleval(vis_im[t, :, :], nodata) or rf.check_singleval(
+                    corr_im[t, :, :], nodata
+                ):
+                    deglinted_im[t, :, :] = np.full((self.nrows, self.ncols), nodata)
+                    success_bands.append(False)
+                    continue  # go to next timestamp
+
+                deglinted_im[t, :, :] = subtract_backend(
+                    vis_band=vis_im[t, :, :],
+                    corr_band=corr_im[t, :, :],
+                    water_mask=water_mask,
+                    nodata=nodata,
+                    scale_factor=self.scale_factor,
+                    clip=False,
+                )
+                success_bands.append(True)
+
+            xr_dvars[f"{visname}"] = xr.Variable(
+                dims=["time", "y", "x"],
+                data=deglinted_im,
+                attrs={"deglint_success": success_bands},
+            )
+
+        # create the output xarray.Dataset
+        new_attrs = self.xarr.attrs.copy()
+        new_attrs["deglint_algorithm"] = "NIR/SWIR subtraction"
+
+        new_coords = {
+            "time": self.xarr.coords["time"].values,
+            "y": self.xarr.coords["y"].values,
+            "x": self.xarr.coords["x"].values,
+        }
+
+        deglinted_dxr = xr.Dataset(data_vars=xr_dvars, coords=new_coords, attrs=new_attrs)
+
+        return deglinted_dxr
+
+    def hedley_2005(
+        self,
+        vis_bands: List[str],
+        corr_band: str,
+        plot: bool = False,
+        roi_shplist: Optional[Union[List[Path], List[str]]] = None,
+        rgb_varlist: Optional[List[str]] = None,
+        dwnscale_factor: Optional[float] = 3.0,
+        odir: Optional[Path] = None,
+    ) -> xr.Dataset:
+        """
+        Sunglint correction using the algorithm:
+        Hedley, J. D., Harborne, A. R., Mumby, P. J. (2005). Simple and
+        robust removal of sun glint for mapping shallow-water benthos.
+        International Journal of Remote Sensing, 26(10), 2107-2112.
+
+        Parameters
+        ----------
+        vis_bands : list
+            A list of data variable names present in the xarray for
+            the visible bands that will be deglinted.
+
+        corr_band : str
+            The variable name in the xarray for the NIR/SWIR band
+            that will be used to deglint the VIS bands.
+
+        plot : bool (True | False)
+            True will save the correlation plots to the odir specified above.
+
+        roi_shplist : List or None
+            A list of Paths to the shapefile for each timestamp in the
+            xarray. The shapefiles should have a polygon of a deep
+            water region containing a range of sunglint contaminated pixels
+
+        dwnscale_factor : float >= 1
+            The downscaling factor used to downscale the native RGB
+            bands to generate the quicklook RGB.
+
+            If dwnscale_factor = 3 then the spatial resolution of the
+            quicklook RGB will be reduced by a factor of three
+
+            If dwnscale_factor = 1 then no downscaling is performed
+
+        odir : Path
+            The path where the correlation plots (if specified) and
+            roi shapefile(s) are saved.
+            * if odir=None and plot=True, then raise ValueError
+            * if odir=None and roi_shpfile=None then shapefiles
+              will be stored in a temporary directory that are
+              removed upon completion.
+
+        Returns
+        -------
+        deglinted_dxr : xarray.Dataset
+            xarray object containing the deglinted vis_bands
+
+        Notes
+        -----
+        1) Python's rasterio and fiona are used to load
+           the shapefile as a mask using the NIR/SWIR band
+           as the reference.
+
+        2) Individual correlation plots are generated
+           between each VIS band and the NIR/SWIR band.
+
+        Raises
+        ------
+        ValueError
+            * if any of the bands do not exist;
+            * if odir=None and plot=True;
+            * if dwnscale_factor < 1
+            * if len(roi_shplist) != number timestamps in xarray;
+            * if roi_shplist contains elements that aren't pathlib.Path
+              or str objects;
+            * if roi_shplist contains shapefiles that do not exist
+        """
+        if dwnscale_factor < 1:
+            raise ValueError("\ndwnscale_factor must be a float >= 1")
+
+        # Check potential input errors
+        if not odir and plot:
+            raise ValueError("odir=None and plot=True. Please specify odir")
+
+        # create TemporaryDirectory if odir=None. At this point,
+        # tmpdir will be used to store the roi shapefiles (if required)
+        tmpdir = None
+        if not odir:
+            tmpdir = tempfile.TemporaryDirectory(".tmp", "hedley-")
+            odir = Path(tmpdir.name)
+
+        # Check if variable names in vis_bands & corr_band exist
+        self.check_bands_in_xarr(vis_bands)
+        self.check_bands_in_xarr([corr_band])
+
+        if not roi_shplist:
+            # let the user select the homogeneous roi for each timestamp
+            roi_shplist = []
+            for t in range(self.ntime):
+                # generate quicklook RGB
+                rgb_im, rgb_meta = rf.quicklook_rgb_xr(
+                    xarr=self.xarr.isel(time=t),
+                    rgb_varlist=rgb_varlist,
+                    scale_factor=self.scale_factor,
+                    dwnscale_factor=dwnscale_factor,
+                    mask_nodata=True,
+                )
+
+                # select a homogeneous water ROI and store in shapefile
+                shp_file = odir / f"user_roi_{t}.shp"
+                rf.create_roi_shp(shp_file, rgb_im, rgb_meta)
+
+                roi_shplist.append(shp_file)
+
+        else:
+            # check roi_shplist
+            self.check_roi_shplist(roi_shplist)
+
+        # initiate plotting variables
+        if plot:
+            # fig & ax will be reused to reduce memory consumption
+            fig, ax = plt.subplots(nrows=1, ncols=1)
+
+        # get the nir/swir band
+        corr_im = self.xarr.variables[corr_band].values  # 3D
+
+        # create metadata dict for creating a mask from a shapefile
+        metad = {
+            "crs": self.xarr.crs,
+            "width": self.ncols,
+            "height": self.nrows,
+            "transform": self.xarr.affine,
+        }
+
+        xr_dvars = {}
+        for visname in vis_bands:
+            vis_im = self.xarr.variables[visname].values  # 3D
+            nodata = self.xarr.variables[visname].attrs["nodata"]
+            dtype = self.xarr.variables[visname].dtype
+
+            # create empty output array
+            deglinted_im = np.zeros(
+                [self.ntime, self.nrows, self.ncols], order="C", dtype=dtype
+            )
+
+            success_bands = []
+
+            # iterate through time
+            for t in range(self.ntime):
+
+                # check for nodata/empty arrays:
+                if rf.check_singleval(vis_im[t, :, :], nodata) or rf.check_singleval(
+                    corr_im[t, :, :], nodata
+                ):
+                    deglinted_im[t, :, :] = np.full((self.nrows, self.ncols), nodata)
+                    success_bands.append(False)
+                    continue  # go to next timestamp
+
+                # water_mask should identify all valid water pixels
+                water_mask = (vis_im[t, :, :] != nodata) & (corr_im[t, :, :] != nodata)
+
+                # create mask from the shapefile of this timestamp
+                roi_mask = rf.load_mask_from_shp(roi_shplist[t], metad)
+                roi_mask[~water_mask] = False
+
+                if plot:
+                    vis_bname = f"{visname}_time{t}"
+                    corr_bname = f"{corr_band}_time{t}"
+                    plot_tuple = (fig, ax, vis_bname, corr_bname, odir)
+                else:
+                    plot_tuple = None
+
+                deglinted_im[t, :, :], success = hedley_backend(
+                    vis_im=vis_im[t, :, :],
+                    corr_im=corr_im[t, :, :],
+                    water_mask=water_mask,
+                    roi_mask=roi_mask,
+                    nodata=nodata,
+                    scale_factor=self.scale_factor,
+                    clip=False,
+                    plot=plot,
+                    plot_tuple=plot_tuple,
+                )
+
+                success_bands.append(success)
+
+            # success_bands indicate which band/timestamps that the
+            # deglinting failed - typically as a result of an
+            # insufficient number of valid pixels in the ROI
+            xr_dvars[f"{visname}"] = xr.Variable(
+                dims=["time", "y", "x"],
+                data=deglinted_im,
+                attrs={"deglint_success": success_bands},
+            )
+
+        # create the output xarray.Dataset
+        new_attrs = self.xarr.attrs.copy()
+        new_attrs["deglint_algorithm"] = "Hedley et al. (2005)"
+
+        new_coords = {
+            "time": self.xarr.coords["time"].values,
+            "y": self.xarr.coords["y"].values,
+            "x": self.xarr.coords["x"].values,
+        }
+
+        deglinted_dxr = xr.Dataset(data_vars=xr_dvars, coords=new_coords, attrs=new_attrs)
+
+        # cleanup tmpdir
+        if isinstance(tmpdir, tempfile.TemporaryDirectory):
+            tmpdir.cleanup()
+
+        return deglinted_dxr
+
+    def cox_munk(
+        self,
+        vis_bands: List[str],
+        vzen_band: str,
+        szen_band: str,
+        razi_band: str,
+        wind_speed: float = 5,
+    ) -> xr.Dataset:
+        """
+        Performs the wind-direction-independent Cox and Munk (1954)
+        sunglint correction on the specified visible bands. This
+        algorithm is suitable for spatial resolutions between
+        100 - 1000 metres (Kay et al., 2009). Fresnel reflectance
+        of sunglint is assumed to be wavelength-independent.
+
+        Cox, C., Munk, W. 1954. Statistics of the Sea Surface Derived
+        from Sun Glitter. J. Mar. Res., 13, 198-227.
+
+        Cox, C., Munk, W. 1954. Measurement of the Roughness of the Sea
+        Surface from Photographs of the Suns Glitter. J. Opt. Soc. Am.,
+        44, 838-850.
+
+        Kay, S., Hedley, J. D., Lavender, S. 2009. Sun Glint Correction
+        of High and Low Spatial Resolution Images of Aquatic Scenes:
+        a Review of Methods for Visible and Near-Infrared Wavelengths.
+        Remote Sensing, 1, 697-730; doi:10.3390/rs1040697
+
+        Parameters
+        ----------
+        vis_bands : list
+            A list of band numbers in the visible that will be deglinted
+
+        vzen_band : str
+            The variable name in the xarray.Datatset for the satellite
+            view-zenith band
+
+        szen_band : str
+            The variable name in the xarray.Dataset for the solar-zenith
+            band
+
+        razi_band : str
+            The variable name in the xarray.Dataset for the relative
+            azimuth band
+
+        wind_speed : float
+            wind speed (m/s)
+
+        Returns
+        -------
+        deglinted_dxr : xr.Dataset
+            xarray.Dataset object containing the deglinted vis_bands
+
+        Raises
+        ------
+        ValueError:
+            * If any of the input variable names do not exist
+            * if input arrays are not two-dimensional
+            * if dimension mismatch
+            * if wind_speed < 0
+        """
+        # check if all input variable names exist in the xarray.Dataset
+        self.check_bands_in_xarr(vis_bands)
+        self.check_bands_in_xarr([vzen_band])
+        self.check_bands_in_xarr([szen_band])
+        self.check_bands_in_xarr([razi_band])
+
+        view_zenith = self.xarr.variables[vzen_band].values  # 3D
+        solar_zenith = self.xarr.variables[szen_band].values  # 3D
+        relative_azimuth = self.xarr.variables[razi_band].values  # 3D
+
+        # for these arrays, nodata = np.nan
+        # self.xarr.variables[vzen_band].attrs["nodata"] = "NaN"
+        # i.e. a str, convert to np.float64
+        p_nodata = np.float64(self.xarr.variables[vzen_band].attrs["nodata"])
+        szen_nodata = np.float64(self.xarr.variables[szen_band].attrs["nodata"])
+        razi_nodata = np.float64(self.xarr.variables[razi_band].attrs["nodata"])
+
+        xr_dvars = {}
+        for visname in vis_bands:
+            vis_im = self.xarr.variables[visname].values
+            nodata = self.xarr.variables[visname].attrs["nodata"]
+            dtype = self.xarr.variables[visname].dtype  # <class 'numpy.dtype'>
+
+            deglinted_im = np.zeros(
+                [self.ntime, self.nrows, self.ncols], order="C", dtype=dtype
+            )
+
+            success_bands = []
+            # iterate through time and deglint
+            for t in range(self.ntime):
+
+                # check for nodata/empty arrays:
+                if (
+                    rf.check_singleval(view_zenith[t, :, :], p_nodata)
+                    or rf.check_singleval(solar_zenith[t, :, :], szen_nodata)
+                    or rf.check_singleval(relative_azimuth[t, :, :], razi_nodata)
+                    or rf.check_singleval(vis_im[t, :, :], nodata)
+                ):
+                    deglinted_im[t, :, :] = np.full((self.nrows, self.ncols), nodata)
+                    success_bands.append(False)
+                    continue  # go to next timestamp
+
+                # ------------------------------- #
+                #  Estimate sunglint reflectance  #
+                # ------------------------------- #
+
+                p_glint, p_fresnel = coxmunk_backend(
+                    view_zenith=view_zenith[t, :, :],
+                    solar_zenith=solar_zenith[t, :, :],
+                    relative_azimuth=relative_azimuth[t, :, :],
+                    wind_speed=wind_speed,
+                    return_fresnel=False,
+                )
+                # although the fresnel reflectance (p_fresnel) is not used,
+                # it is useful to keep for testing/debugging
+
+                # Notes:
+                #    * if return_fresnel=True  then p_fresnel = numpy.ndarray
+                #    * if return_fresnel=False then p_fresnel = None
+                #    * 0 <= p_glint   (np.float32) <= 1
+                #    * 0 <= p_fresnel (np.float32) <= 1
+
+                # In this implementation, the scale_factor (usually 10,000)
+                # will not be applied to minimise storage of deglinted
+                # bands. Hence, we need to multiply p_glint by this factor
+                p_glint[p_glint != p_nodata] *= self.scale_factor
+
+                water_mask = (vis_im[t, :, :] != nodata) & (p_glint != p_nodata)
+
+                deglinted_im[t, :, :] = subtract_backend(
+                    vis_band=vis_im[t, :, :],
+                    corr_band=p_glint,
+                    water_mask=water_mask,
+                    nodata=nodata,
+                    scale_factor=self.scale_factor,
+                    clip=False,
+                )
+                success_bands.append(True)
+
+            xr_dvars[f"{visname}"] = xr.Variable(
+                dims=["time", "y", "x"],
+                data=deglinted_im,
+                attrs={"deglint_success": success_bands},
+            )
+
+        # create the output xarray.Dataset
+        new_attrs = self.xarr.attrs.copy()
+        new_attrs["deglint_algorithm"] = "wind-direction-independent Cox and Munk (1954)"
+
+        new_coords = {
+            "time": self.xarr.coords["time"].values,
+            "y": self.xarr.coords["y"].values,
+            "x": self.xarr.coords["x"].values,
+        }
+
+        deglinted_dxr = xr.Dataset(data_vars=xr_dvars, coords=new_coords, attrs=new_attrs)
+
+        return deglinted_dxr
+
+
 class GlintCorr:
+    """
+    yaml and dc_dataset version of Glint Correction
+    """
+
     def __init__(
         self,
         dc_dataset: Union[Dataset, Path, str],
@@ -67,7 +610,7 @@ class GlintCorr:
             self.group_path = dc_dataset.local_path.parent
 
         elif isinstance(dc_dataset, Path):
-            # check if Path is a yaml... Exception if not
+            # check if Path is a yaml.
             metadata_dict = self.load_yaml(dc_dataset)
             self.group_path = dc_dataset.parent
 
@@ -93,7 +636,7 @@ class GlintCorr:
         # check the sensor
         self.check_sensor()
 
-        # write code that extracts the grid_dict
+        # extract the res_dict
         self.res_dict = self.create_band_res_dict(metadata_dict)
 
         # define the scale factor to convert to reflectance
@@ -108,6 +651,10 @@ class GlintCorr:
         # get a useful deep-water ROI shapefil
         self.obase_shp = self.useful_obase + "_deepWater_ROI.shp"
 
+        # get the list of rgb bands that will be used in generating
+        # an RGB image for selecting a homogeneous water ROI
+        self.rgb_bandlist = self.get_rgb_blist()
+
         if fmask_file:
             self.fmask_file = Path(fmask_file)
         else:
@@ -118,7 +665,7 @@ class GlintCorr:
 
     def load_yaml(self, p: Path) -> dict:
         if ".odc-metadata.yaml" not in p.name:
-            raise Exception(f"{p} is not a .odc-metadata.yaml")
+            raise ValueError(f"{p} is not a .odc-metadata.yaml")
 
         with p.open() as f:
             contents = yaml.load(f, Loader=yaml.FullLoader)
@@ -138,7 +685,7 @@ class GlintCorr:
     def check_sensor(self):
         if self.sensor not in SUPPORTED_SENSORS:
             msg = f"Supported sensors are: {SUPPORTED_SENSORS}, recieved {self.sensor}"
-            raise Exception(msg)
+            raise ValueError(msg)
 
     def check_path_exists(self, path: Path):
         """ Checks if a path exists """
@@ -315,7 +862,7 @@ class GlintCorr:
             try:
                 meas_dict = metadata_dict["image"]["bands"]
             except KeyError:
-                raise Exception(
+                raise ValueError(
                     'unable to extract bands, "bands" not in metadata_dict["image"]'
                 )
 
@@ -323,7 +870,7 @@ class GlintCorr:
             # newer version
             meas_dict = metadata_dict["measurements"]
         else:
-            raise Exception(
+            raise ValueError(
                 "neither image nor measurements keys were found in metadata_dict"
             )
 
@@ -362,19 +909,19 @@ class GlintCorr:
             try:
                 sensor = join_sensor(metadata_dict["platform"]["code"].lower())
             except KeyError:
-                raise Exception(f'{msg}, "code" not in metadata_dict["platform"]')
+                raise ValueError(f'{msg}, "code" not in metadata_dict["platform"]')
 
         elif "properties" in metadata_dict:
             # newer version
             try:
                 sensor = join_sensor(metadata_dict["properties"]["eo:platform"].lower())
             except KeyError:
-                raise Exception(
+                raise ValueError(
                     f'{msg}, "eo:platform" not in metadata_dict["properties"]'
                 )
 
         else:
-            raise Exception(
+            raise ValueError(
                 "neither platform nor properties keys were found in metadata_dict"
             )
 
@@ -423,7 +970,7 @@ class GlintCorr:
             if msg == "Unable to extract overpass datetime":
                 msg += '"extent" or "properties" not in metadata_dict'
 
-            raise Exception(f"{msg}")
+            raise ValueError(f"{msg}")
 
         return overpass_datetime
 
@@ -495,74 +1042,10 @@ class GlintCorr:
 
         return bandlist, bandnums, bandnames, bandres
 
-    def get_fmask_file(self) -> Path:
+    def get_rgb_blist(self) -> List[Path]:
         """
-        Get the fmask file from self.meas_dict
-
-        Returns
-        -------
-        fmask_file : Path
-            fmask filename
-
-        Raises
-        ------
-        Exception if fmask file is not found
+        Get the RGB band-list
         """
-        msg = "Unable to extract fmask"
-        if "fmask" in self.meas_dict:
-            if "path" in self.meas_dict["fmask"]:
-                fmask_file = self.group_path.joinpath(self.meas_dict["fmask"]["path"])
-            else:
-                raise Exception(f'{msg}, "path" not in self.meas_dict["fmask"]')
-
-        elif "oa_fmask" in self.meas_dict:
-            if "path" in self.meas_dict["oa_fmask"]:
-                fmask_file = self.group_path.joinpath(self.meas_dict["oa_fmask"]["path"])
-            else:
-                raise Exception(f'{msg}, "path" not in self.meas_dict["oa_fmask"]')
-
-        else:
-            raise Exception(f'{msg}, "fmask" or "oa_fmask" not in self.meas_dict')
-
-        return fmask_file
-
-    def quicklook_rgb(self, dwnscale_factor: float = 3) -> Tuple[np.ndarray, dict]:
-        """
-        Generate a quicklook from the sensor's RGB bands
-
-        Parameters
-        ----------
-        dwnscale_factor : float >= 1
-            The downscaling factor.
-            If dwnscale_factor = 3 then the spatial resolution
-            of the quicklook RGB will be reduced by a factor
-            of three from the native resolution of the sensors'
-            RGB bands.
-
-            If dwnscale_factor = 1 then no downscaling is
-            performed, thus the native resolution of the RGB
-            bands are used.
-
-            e.g. if dwnscale_factor = 3, then the 10 m RGB bands
-            will be downscaled to 30 m spatial resolution
-
-        Returns
-        -------
-        rgb_im : numpy.ndarray
-            RGB image with the following dimensions
-            [nrows, ncols, 3] for the three channels
-
-        rgb_meta : dict
-            Metadata dictionary taken from rasterio
-
-        Raises
-        ------
-        Exception
-            * if dwnscale_factor < 1
-        """
-        if dwnscale_factor < 1:
-            raise Exception("\ndwnscale_factor must be a float >= 1")
-
         if (
             (self.sensor == "sentinel2a")
             or (self.sensor == "sentinel2b")
@@ -582,86 +1065,38 @@ class GlintCorr:
             ix_grn = self.band_ids.index("3")
             ix_blu = self.band_ids.index("2")
 
-        rgb_bandlist = [
-            self.band_list[ix_red],
-            self.band_list[ix_grn],
-            self.band_list[ix_blu],
-        ]
-        with rasterio.open(rgb_bandlist[0], "r") as ds:
-            ql_spatial_res = dwnscale_factor * float(ds.transform.a)
+        return [self.band_list[ix_red], self.band_list[ix_grn], self.band_list[ix_blu]]
 
-        if dwnscale_factor > 1:
-            # resample to quicklook spatial resolution
-            resmpl_tifs, refl_im, rio_meta = rio_funcs.resample_bands(
-                rgb_bandlist,
-                ql_spatial_res,
-                Resampling.nearest,
-                load=True,
-                save=False,
-                odir=None,
-            )
+    def get_fmask_file(self) -> Path:
+        """
+        Get the fmask file from self.meas_dict
+
+        Returns
+        -------
+        fmask_file : Path
+            fmask filename
+
+        Raises
+        ------
+        ValueError if fmask file is not found
+        """
+        msg = "Unable to extract fmask"
+        if "fmask" in self.meas_dict:
+            if "path" in self.meas_dict["fmask"]:
+                fmask_file = self.group_path.joinpath(self.meas_dict["fmask"]["path"])
+            else:
+                raise ValueError(f'{msg}, "path" not in self.meas_dict["fmask"]')
+
+        elif "oa_fmask" in self.meas_dict:
+            if "path" in self.meas_dict["oa_fmask"]:
+                fmask_file = self.group_path.joinpath(self.meas_dict["oa_fmask"]["path"])
+            else:
+                raise ValueError(f'{msg}, "path" not in self.meas_dict["oa_fmask"]')
+
         else:
-            refl_im, rio_meta = rio_funcs.load_bands(
-                rgb_bandlist, self.scale_factor, False
-            )
+            raise ValueError(f'{msg}, "fmask" or "oa_fmask" not in self.meas_dict')
 
-        # use NASA-OBPG SeaDAS's transformation to create
-        # a very pretty RGB
-        rgb_im = seadas_style_rgb(
-            refl_img=refl_im, rgb_ix=[0, 1, 2], scale_factor=self.scale_factor
-        )
-
-        rio_meta["band_1"] = rgb_bandlist[0].stem
-        rio_meta["band_2"] = rgb_bandlist[1].stem
-        rio_meta["band_3"] = rgb_bandlist[2].stem
-        rio_meta["dtype"] = rgb_im.dtype.name  # this should np.unit8
-
-        return rgb_im, rio_meta
-
-    def create_roi_shp(self, shp_file: Path, dwnscaling_factor: float = 3):
-        """
-        Create a shapefile containing a polygon of
-        a ROI that is selected using the interactive
-        quicklook RGB
-
-        Parameters
-        ----------
-        shp_file : Path
-            shapefile containing a polygon
-
-        dwnscale_factor : float >= 1
-            The downscaling factor used to downscale the native
-            RGB bands to generate the quicklook RGB.
-
-            If dwnscale_factor = 3 then the spatial resolution
-            of the quicklook RGB will be reduced by a factor
-            of three from the native resolution of the sensors'
-            RGB bands.
-
-            If dwnscale_factor = 1 then no downscaling is
-            performed, thus the native resolution of the RGB
-            bands are used.
-
-            e.g. if dwnscale_factor = 3, then the 10 m RGB bands
-            will be downscaled to 30 m spatial resolution
-
-        Rasies:
-            Exception if dwnscaling_factor < 1
-        """
-        # generate a downscaled quicklook
-        rgb_im, rgb_meta = self.quicklook_rgb(dwnscaling_factor)
-
-        # let the user select a ROI from the quicklook RGB
-        ax = display_image(rgb_im, None)
-        mc = RoiSelector(ax=ax)
-        mc.interative()
-        plt.show()
-
-        # write a shapefile
-        mc.verts_to_shp(metadata=rgb_meta, shp_file=shp_file)
-
-        # close the RoiSelector
-        mc = None
+        return fmask_file
 
     def glint_subtraction(
         self,
@@ -706,9 +1141,9 @@ class GlintCorr:
 
         Raises
         ------
-        Exception
-            * If any of the bands do not exist
-            * If any of the input data only contains nodata
+        ValueError
+            * if any of the bands do not exist
+            * if any of the input data only contains nodata
         """
 
         # Check that the input vis bands exist
@@ -747,7 +1182,10 @@ class GlintCorr:
                     nodata = ds_vis.nodata
 
                     if nodata is not None:
-                        rio_funcs.check_image_singleval(vis_im, nodata, "vis_im")
+                        if rf.check_singleval(vis_im, nodata):
+                            raise ValueError(
+                                f"vis_im only contains a single value ({nodata})"
+                            )
 
                     # Because we are iterating over visible bands that
                     # have the same spatial resolution, crs and Affine
@@ -755,35 +1193,39 @@ class GlintCorr:
                     # and NIR once.
                     if i == 0:
                         # Resample and load fmask_file
-                        fmask = rio_funcs.resample_file_to_ds(
+                        fmask = rf.resample_file_to_ds(
                             self.fmask_file, ds_vis, Resampling.mode
                         )
 
                         # Resample NIR/SWIR band
-                        nir_im = rio_funcs.resample_file_to_ds(
+                        corr_im = rf.resample_file_to_ds(
                             corr_bandpath, ds_vis, Resampling.bilinear
                         )
 
-                        rio_funcs.check_image_singleval(nir_im, nodata, "nir_im")
+                        if rf.check_singleval(corr_im, nodata):
+                            raise ValueError(
+                                f"corr_im only contains a single value ({nodata})"
+                            )
 
-                # create masks
+                # create mask and deglint
                 water_mask = (
-                    (fmask == water_val) & (vis_im != nodata) & (nir_im != nodata)
+                    (fmask == water_val) & (vis_im != nodata) & (corr_im != nodata)
                 )
 
-                deglint_band = np.array(vis_im, order="K", copy=True)
-
-                # deglint water pixels by subtracting the NIR/SWIR reflectance
-                deglint_band[water_mask] = vis_im[water_mask] - nir_im[water_mask]
-
-                # apply mask
-                deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
+                deglint_band = subtract_backend(
+                    vis_band=vis_im,
+                    corr_band=corr_im,
+                    water_mask=water_mask,
+                    nodata=nodata,
+                    scale_factor=self.scale_factor,
+                    clip=False,
+                )
 
                 # add 3D array (1, nrows, ncols) to xarray dict.
-                data_varname = "{0}_{1}_subtract_deglint".format(self.sub_product, bname)
-                xr_dvars[data_varname] = (
-                    ["time", "y", "x"],
-                    deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
+                data_varname = f"{self.sub_product}_{bname}"
+                xr_dvars[data_varname] = xr.Variable(
+                    dims=["time", "y", "x"],
+                    data=deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
                 )
 
             # end-for i, bname
@@ -791,7 +1233,7 @@ class GlintCorr:
                 xr_dvars,
                 vis_meta,
                 self.overpass_datetime,
-                f"deglinted {self.sub_product} bands {res} via NIR/SWIR subtraction",
+                "NIR/SWIR subtraction",
             )
 
             dxr_list.append(dxr)
@@ -802,11 +1244,11 @@ class GlintCorr:
     def hedley_2005(
         self,
         vis_bands: List[str],
-        corr_band: List[str],
+        corr_band: str,
         water_val: int = 5,
-        overwrite_shp: bool = False,
         plot: bool = False,
         roi_shpfile: Optional[Path] = None,
+        dwnscale_factor: Optional[float] = 3.0,
         odir: Optional[Path] = None,
     ) -> List[xr.Dataset]:
         """
@@ -826,13 +1268,6 @@ class GlintCorr:
         water_val : int
             The fmask value for water pixels (default = 5)
 
-        overwrite_shp : bool (True | False)
-            Overwrite the shapefile containing a polygon
-            of the sunglint contaminated deep-water region.
-            True  -> overwrites a shapefile (if it exists)
-            False -> uses specified shapefile
-
-
         plot : bool (True | False)
             True will save the correlation plots to the odir specified above.
 
@@ -841,11 +1276,18 @@ class GlintCorr:
             water region containing a range of sunglint
             contaminated pixels
 
+        dwnscale_factor : float >= 1
+            The downscaling factor used to downscale the native RGB
+            bands to generate the quicklook RGB.
+
+            If dwnscale_factor = 3 then the spatial resolution of the
+            quicklook RGB will be reduced by a factor of three
+
+            If dwnscale_factor = 1 then no downscaling is performed
+
         odir : str
             The path where the correlation plots (if specified) are saved.
-
-            if None then:
-            odir = self.group_path / "DEGLINT" / "HEDLEY"
+            if odir=None  tempfile is used
 
         Returns
         -------
@@ -860,45 +1302,61 @@ class GlintCorr:
            (Resampling.bilinear)
 
         2) Python's rasterio and fiona are used to load
-           the shapefile as a mask using the NIR band
+           the shapefile as a mask using the NIR/SWIR band
            as the reference.
 
         3) Individual correlation plots are generated
-           between each VIS band and the NIR band.
+           between each VIS band and the NIR/SWIR band.
 
-        4) nir band is upscaled/downscaled to the
+        4) NIR/SWIR band is upscaled/downscaled to the
            vis bands.
 
         Raises
         ------
-        Exception
-            * If any of the bands do not exist
+        ValueError
+            * if any of the bands do not exist
+            * if odir=None and plot=True
+            * if dwnscale_factor < 1
         """
-        # get name of the sunglint contaminated
-        # deep water region polygon ascii file
-        if not isinstance(roi_shpfile, Path):
-            roi_shpfile = Path(roi_shpfile)
+        # Check potential input errors
+        if not odir and plot:
+            raise ValueError("odir=None and plot=True. Please specify odir")
 
-        if not roi_shpfile:
-            roi_shpfile = self.group_path / "deepWater_ROI_polygon.shp"
+        if dwnscale_factor < 1:
+            raise ValueError("\ndwnscale_factor must be a float >= 1")
 
-        if not roi_shpfile.exists():
-            # use interactive mode to generate the shapefile
-            self.create_roi_shp(roi_shpfile)
-        else:
-            if overwrite_shp:
-                # recreate shapefile
-                self.create_roi_shp(roi_shpfile)
-
-        # create output directory
+        # create TemporaryDirectory if odir=None. At this point,
+        # tmpdir will be used to store the roi shapefiles (if required)
+        tmpdir = None
         if not odir:
-            odir = self.group_path / "DEGLINT" / "HEDLEY"
+            tmpdir = tempfile.TemporaryDirectory(".tmp", "hedley-")
+            odir = Path(tmpdir.name)
         else:
-            if not isinstance(odir, Path):
+            if isinstance(odir, str):
                 odir = Path(odir)
 
-        if not odir.exists():
-            odir.mkdir(exist_ok=True)
+            if not odir.exists():
+                odir.mkdir(exist_ok=True)
+
+        # check roi shapefile
+        if not roi_shpfile:
+            # if not supplied, then create a shapefile in odir
+            roi_shpfile = odir / "deepWater_ROI_polygon.shp"
+
+        else:
+            if isinstance(roi_shpfile, str):
+                roi_shpfile = Path(roi_shpfile)
+
+        if not roi_shpfile.exists():
+            # Generate downsampled quicklook RGB
+            rgb_im, rgb_meta = rf.quicklook_rgb(
+                rgb_bandlist=self.rgb_bandlist,
+                scale_factor=self.scale_factor,
+                dwnscale_factor=dwnscale_factor,
+            )
+
+            # use interactive mode to generate the shapefile
+            rf.create_roi_shp(roi_shpfile, rgb_im, rgb_meta)
 
         # initiate plot if specified
         if plot:
@@ -940,60 +1398,67 @@ class GlintCorr:
                     nodata = ds_vis.nodata
 
                     if nodata is not None:
-                        rio_funcs.check_image_singleval(vis_im, nodata, "vis_im")
+                        if rf.check_singleval(vis_im, nodata):
+                            raise ValueError(
+                                f"vis_im only contains a single value ({nodata})"
+                            )
 
                     # Because we are iterating over visible bands that
                     # have the same spatial resolution, crs and Affine
                     # transformation, we only need resample the fmask
-                    # and NIR once.
+                    # and corr_im once.
                     if i == 0:
                         # Resample and load fmask_file
-                        fmask = rio_funcs.resample_file_to_ds(
+                        fmask = rf.resample_file_to_ds(
                             self.fmask_file, ds_vis, Resampling.mode
                         )
 
                         # Resample NIR/SWIR band
-                        nir_im = rio_funcs.resample_file_to_ds(
+                        corr_im = rf.resample_file_to_ds(
                             corr_bandpath, ds_vis, Resampling.bilinear
                         )
 
-                        rio_funcs.check_image_singleval(nir_im, nodata, "nir_im")
+                        if rf.check_singleval(corr_im, nodata):
+                            raise ValueError(
+                                f"corr_im only contains a single value ({nodata})"
+                            )
 
                         # Load shapefile as a mask
-                        roi_mask = rio_funcs.load_mask_from_shp(roi_shpfile, ds_vis)
+                        roi_mask = rf.load_mask_from_shp(roi_shpfile, vis_meta)
 
                 # create masks
-                flag_mask = (fmask != water_val) | (vis_im == nodata) | (nir_im == nodata)
+                flag_mask = (
+                    (fmask != water_val) | (vis_im == nodata) | (corr_im == nodata)
+                )
                 water_mask = ~flag_mask
-                roi_mask[flag_mask] = nodata
+                roi_mask[flag_mask] = False
 
                 # ------------------------------ #
                 #       Sunglint Correction      #
                 # ------------------------------ #
-                deglint_band = np.array(vis_im, order="K", copy=True)  # copy band
+                if plot:
+                    vis_bname = f"B{res_ordered_vis[res][bname][0]}"
+                    plot_tuple = (fig, ax, vis_bname, f"B{corr_band}", odir)
+                else:
+                    plot_tuple = None
 
-                # 1. Find minimum NIR in the roi polygon
-                roi_valix = np.where(roi_mask != nodata)
-                valid_nir = nir_im[roi_valix]
-                min_refl_nir = valid_nir.min()
-
-                # 2. Get correlations between current band and NIR
-                y_vals = vis_im[roi_valix]
-                slope, y_inter, r_val, p_val, std_err = stats.linregress(
-                    x=valid_nir, y=y_vals
+                deglint_band, success = hedley_backend(
+                    vis_im=vis_im,
+                    corr_im=corr_im,
+                    water_mask=water_mask,
+                    roi_mask=roi_mask,
+                    nodata=nodata,
+                    scale_factor=self.scale_factor,
+                    clip=False,
+                    plot=plot,
+                    plot_tuple=plot_tuple,
                 )
 
-                # 3. deglint water pixels
-                deglint_band[water_mask] = vis_im[water_mask] - slope * (
-                    nir_im[water_mask] - min_refl_nir
-                )
-                deglint_band[(vis_im == nodata) | (nir_im == nodata)] = nodata
-
-                # 4. add 3D array (1, nrows, ncols) to xarray dict.
-                data_varname = "{0}_{1}_hedley_deglint".format(self.sub_product, bname)
-                xr_dvars[data_varname] = (
-                    ["time", "y", "x"],
-                    deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
+                # add 3D array (1, nrows, ncols) to xarray dict.
+                data_varname = f"{self.sub_product}_{bname}"
+                xr_dvars[data_varname] = xr.Variable(
+                    dims=["time", "y", "x"],
+                    data=deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
                 )
 
             # end-for i, bname
@@ -1001,27 +1466,14 @@ class GlintCorr:
                 xr_dvars,
                 vis_meta,
                 self.overpass_datetime,
-                f"deglinted {self.sub_product} bands {res} via Cox and Munk (1954)",
+                "Hedley et al. (2005)",
             )
 
             dxr_list.append(dxr)
 
-            # ------------------------------ #
-            if plot:
-                # create a density plot
-                plot_correlations(
-                    fig=fig,
-                    ax=ax,
-                    r2=r_val ** 2,
-                    slope=slope,
-                    y_inter=y_inter,
-                    nir_vals=valid_nir,
-                    vis_vals=y_vals,
-                    scale_factor=self.scale_factor,
-                    nir_band_id=corr_band,
-                    vis_band_id=res_ordered_vis[res][bname][0],
-                    odir=odir,
-                )
+        # cleanup
+        if isinstance(tmpdir, tempfile.TemporaryDirectory):
+            tmpdir.cleanup()
 
         # endfor res
         return dxr_list
@@ -1092,7 +1544,7 @@ class GlintCorr:
 
         Raises
         ------
-        Exception:
+        ValueError:
             * if input arrays are not two-dimensional
             * if any input arrays only contain nodata
             * if dimension mismatch
@@ -1137,18 +1589,23 @@ class GlintCorr:
         # ------------------------------- #
         #  Estimate sunglint reflectance  #
         # ------------------------------- #
-        vzen_im, vzen_meta = rio_funcs.load_singleband(vzen_file)
-        szen_im, szen_meta = rio_funcs.load_singleband(szen_file)
-        razi_im, razi_meta = rio_funcs.load_singleband(razi_file)
-
-        # for these arrays, nodata = np.nan
-        rio_funcs.check_image_singleval(vzen_im, vzen_meta["nodata"], "view_zenith")
-        rio_funcs.check_image_singleval(szen_im, szen_meta["nodata"], "solar_zenith")
-        rio_funcs.check_image_singleval(razi_im, razi_meta["nodata"], "relative_azimuth")
+        vzen_im, vzen_meta = rf.load_singleband(vzen_file)
+        szen_im, szen_meta = rf.load_singleband(szen_file)
+        razi_im, razi_meta = rf.load_singleband(razi_file)
         cm_meta = szen_meta.copy()
 
+        # for these arrays, nodata = np.nan
+        if rf.check_singleval(vzen_im, vzen_meta["nodata"]):
+            raise ValueError("vzen_im only contains a single value")
+
+        if rf.check_singleval(szen_im, szen_meta["nodata"]):
+            raise ValueError("szen_im only contains a single value")
+
+        if rf.check_singleval(razi_im, razi_meta["nodata"]):
+            raise ValueError("razi_im only contains a single value")
+
         # cox and munk:
-        p_glint, p_fresnel = cm_sunglint(
+        p_glint, p_fresnel = coxmunk_backend(
             view_zenith=vzen_im,
             solar_zenith=szen_im,
             relative_azimuth=razi_im,
@@ -1200,7 +1657,10 @@ class GlintCorr:
                     nodata = ds_vis.nodata
 
                     if nodata is not None:
-                        rio_funcs.check_image_singleval(vis_im, nodata, "vis_im")
+                        if rf.check_singleval(vis_im, nodata):
+                            raise ValueError(
+                                f"vis_im only contains a single value ({nodata})"
+                            )
 
                     # Because we are iterating over visible bands that
                     # have the same spatial resolution, crs and Affine
@@ -1208,7 +1668,7 @@ class GlintCorr:
                     # and p_glint once.
                     if i == 0:
                         # Resample and load fmask_file
-                        fmask = rio_funcs.resample_file_to_ds(
+                        fmask = rf.resample_file_to_ds(
                             self.fmask_file, ds_vis, Resampling.mode
                         )
 
@@ -1221,25 +1681,29 @@ class GlintCorr:
                                 p_fresnel.astype(dtype=vis_im.dtype)
 
                         # resample p_glint
-                        p_glint_res = rio_funcs.resample_band_to_ds(
+                        p_glint_res = rf.resample_band_to_ds(
                             p_glint, cm_meta, ds_vis, Resampling.bilinear
                         )
 
                 # ------------------------------ #
                 #       Sunglint Correction      #
                 # ------------------------------ #
-                # copy band
-                deglint_band = np.array(vis_im, order="K", copy=True)
-                water_msk = (fmask == water_val) & (vis_im != nodata)
+                water_mask = (fmask == water_val) & (vis_im != nodata)
 
-                # deglint water pixels
-                deglint_band[water_msk] = vis_im[water_msk] - p_glint_res[water_msk]
+                deglint_band = subtract_backend(
+                    vis_band=vis_im,
+                    corr_band=p_glint_res,
+                    water_mask=water_mask,
+                    nodata=nodata,
+                    scale_factor=self.scale_factor,
+                    clip=False,
+                )
 
                 # add 3D array (1, nrows, ncols) to xarray dict.
-                data_varname = "{0}_{1}_cox_munk_deglint".format(self.sub_product, bname)
-                xr_dvars[data_varname] = (
-                    ["time", "y", "x"],
-                    deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
+                data_varname = f"{self.sub_product}_{bname}"
+                xr_dvars[data_varname] = xr.Variable(
+                    dims=["time", "y", "x"],
+                    data=deglint_band.reshape(1, vis_meta["height"], vis_meta["width"]),
                 )
 
             # end-for i, bname
@@ -1247,9 +1711,8 @@ class GlintCorr:
                 xr_dvars,
                 vis_meta,
                 self.overpass_datetime,
-                f"deglinted {self.sub_product} bands {res} via Cox and Munk (1954)",
+                "wind-direction-independent Cox and Munk (1954)",
             )
-
             dxr_list.append(dxr)
 
         # endfor res
