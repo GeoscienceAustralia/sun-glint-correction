@@ -36,7 +36,7 @@ def test_mnir_image():
         water_val=5,
     )
 
-    sungc_band = mnir_xarrlist[0].lmbadj_green_subtract_deglint.values  # 3D array
+    sungc_band = mnir_xarrlist[0].lmbadj_green.values  # 3D array
 
     # path to expected sunglint corrected output from NIR subtraction
     exp_sungc_band = (
