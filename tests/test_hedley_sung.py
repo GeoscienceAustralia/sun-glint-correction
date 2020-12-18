@@ -20,6 +20,7 @@ import pytest
 import rasterio
 from pathlib import Path
 from fiona import collection
+from rasterio.crs import CRS
 from shapely.geometry import Point, LineString, mapping
 
 from sungc import deglint
@@ -52,13 +53,12 @@ def test_hedley_image(tmp_path):
         vis_bands=["3"],
         corr_band="6",
         roi_shpfile=shp_file,
-        overwrite_shp=False,
         odir=hedley_dir,
         water_val=5,
         plot=False,
     )
 
-    sungc_band = hedley_xarrlist[0].lmbadj_green_hedley_deglint.values  # 3D array
+    sungc_band = hedley_xarrlist[0].lmbadj_green.values  # 3D array
 
     # path to expected sunglint corrected output from Hedley et al.
     exp_sungc_band = (
@@ -90,7 +90,6 @@ def test_hedley_plot(tmp_path):
         vis_bands=["3"],
         corr_band="6",
         roi_shpfile=shp_file,
-        overwrite_shp=False,
         odir=hedley_dir,
         water_val=5,
         plot=True,  # a plot should be generated in hedley_dir
@@ -119,7 +118,6 @@ def test_hedley_bands(tmp_path):
             vis_bands=["20"],  # this band doesn't exist
             corr_band="6",
             roi_shpfile=shp_file,
-            overwrite_shp=False,
             odir=hedley_dir,
             water_val=5,
             plot=False,
@@ -132,7 +130,6 @@ def test_hedley_bands(tmp_path):
             vis_bands=["3"],
             corr_band="20",  # this band doesn't exist
             roi_shpfile=shp_file,
-            overwrite_shp=False,
             odir=hedley_dir,
             water_val=5,
             plot=False,
@@ -155,7 +152,6 @@ def test_empty_band(tmp_path):
             vis_bands=["7"],  # dummy band only contains nodata (-999)
             corr_band="6",
             roi_shpfile=shp_file,
-            overwrite_shp=False,
             odir=hedley_dir,
             water_val=5,
             plot=False,
@@ -167,7 +163,6 @@ def test_empty_band(tmp_path):
             vis_bands=["3"],
             corr_band="7",  # dummy band only contains nodata (-999)
             roi_shpfile=shp_file,
-            overwrite_shp=False,
             odir=hedley_dir,
             water_val=5,
             plot=False,
@@ -194,7 +189,6 @@ def test_fake_shp(tmp_path):
             vis_bands=["3"],
             corr_band="6",
             roi_shpfile=fake_shp,
-            overwrite_shp=False,
             odir=hedley_dir,
             water_val=5,
             plot=False,
@@ -229,7 +223,13 @@ def test_failure_point_shp(tmp_path):
     ]
     schema = {"geometry": "Point", "properties": {"name": "str"}}
 
-    with collection(point_shp, "w", "ESRI Shapefile", schema) as shp:
+    with collection(
+        point_shp,
+        mode="w",
+        driver="ESRI Shapefile",
+        schema=schema,
+        crs=CRS.from_epsg(4326),
+    ) as shp:
         for cap in capital_arr:
             shp.write(
                 {
@@ -242,7 +242,6 @@ def test_failure_point_shp(tmp_path):
             vis_bands=["3"],
             corr_band="6",
             roi_shpfile=point_shp,
-            overwrite_shp=False,
             odir=hedley_dir,
             water_val=5,
             plot=False,
@@ -261,7 +260,13 @@ def test_failure_point_shp(tmp_path):
     gls = LineString([Point(perth[0], perth[1]), Point(canbr[0], canbr[1])])
 
     schema = {"geometry": "LineString", "properties": {"name": "str"}}
-    with collection(linestr_shp, "w", "ESRI Shapefile", schema) as shp:
+    with collection(
+        linestr_shp,
+        mode="w",
+        driver="ESRI Shapefile",
+        schema=schema,
+        crs=CRS.from_epsg(4326),
+    ) as shp:
         shp.write(
             {
                 "properties": {"name": "Perth_to_Canberra"},
@@ -273,7 +278,6 @@ def test_failure_point_shp(tmp_path):
             vis_bands=["3"],
             corr_band="6",
             roi_shpfile=linestr_shp,
-            overwrite_shp=False,
             odir=hedley_dir,
             water_val=5,
             plot=False,
