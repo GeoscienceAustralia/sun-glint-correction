@@ -404,7 +404,7 @@ class GlintCorrX:
         deglinted_dxr = xr.Dataset(data_vars=xr_dvars, coords=new_coords, attrs=new_attrs)
 
         # cleanup tmpdir
-        if isinstance(tmpdir, tempfile.TemporaryDirectory):
+        if tmpdir is not None:
             tmpdir.cleanup()
 
         return deglinted_dxr
@@ -1472,7 +1472,7 @@ class GlintCorr:
             dxr_list.append(dxr)
 
         # cleanup
-        if isinstance(tmpdir, tempfile.TemporaryDirectory):
+        if tmpdir is not None
             tmpdir.cleanup()
 
         # endfor res
