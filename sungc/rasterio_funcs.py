@@ -1,29 +1,51 @@
 #!/usr/bin/env python3
 
-import fiona
 import warnings
 import rasterio
 import rasterio.mask
+import rasterio.features
 import numpy as np
+import xarray as xr
+import geopandas as gpd
 
 from pathlib import Path
-from rasterio import DatasetReader
-from rasterio.warp import reproject, Resampling
 from typing import Union, List, Tuple
+from rasterio import DatasetReader
+from rasterio.crs import CRS
+from rasterio.warp import reproject, Resampling
+
+from sungc.interactive import RoiSelector
+from sungc.visualise import seadas_style_rgb
 
 
-def check_image_singleval(image: np.ndarray, value: Union[float, int], img_name: str):
+def check_singleval(image: np.ndarray, nodata_val: Union[float, int]) -> bool:
     """
-    Checks if numpy image has only a single value. If so, raises Exception
+    Checks if numpy image has only a single value.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        band to test
+
+    nodata_val : float or int
+        nodata value
+
+    Returns
+    -------
+    is_empty : bool
+        if True, image only contains nodata
     """
-    if np.isnan(value):
-        if not ~np.isnan(image).any():
-            # if there are no non-nan pixels (if all pixels are np.nan)
-            raise Exception(f"{img_name} only contains a single value ({value})")
+    is_empty = False
+    if np.isnan(nodata_val):
+        if np.isnan(image).all():
+            # all pixels are np.nan
+            is_empty = True
 
     else:
-        if np.all(image == value):
-            raise Exception(f"{img_name} only contains a single value ({value})")
+        if np.all(image == nodata_val):
+            is_empty = True
+
+    return is_empty
 
 
 def get_resample_bandname(filename: Path, spatial_res: Union[int, float, str]) -> str:
@@ -90,7 +112,7 @@ def load_bands(
         rasterio metadata
     """
     if scale_factor <= 0:
-        raise Exception("load_bands: scale_factor <= 0")
+        raise ValueError("load_bands: scale_factor <= 0")
 
     nbands = len(bandlist)
     spectral_cube = None
@@ -190,7 +212,7 @@ def resample_bands(
 
     Raises
     ------
-    Exception
+    ValueError
         * resample_spatial_res <= 0
         * if save=True and odir=None
         * if save=True and odir does not exist.
@@ -206,7 +228,7 @@ def resample_bands(
 
     """
     if resample_spatial_res <= 0:
-        raise Exception("\nresample_spatial_res must be > 0")
+        raise ValueError("\nresample_spatial_res must be > 0")
 
     metad = None
     data_type = None
@@ -220,10 +242,10 @@ def resample_bands(
         if odir:
             out_dir = odir
             if not out_dir.exists():
-                raise Exception(f"\n{out_dir} does not exist.")
+                raise ValueError(f"\n{out_dir} does not exist.")
 
         else:
-            raise Exception(
+            raise ValueError(
                 "\nsave requested for resampled geotiff, but odir not specified"
             )
 
@@ -406,7 +428,7 @@ def resample_band_to_ds(
     return resampled_img
 
 
-def load_mask_from_shp(shp_file: Path, ref_ds: DatasetReader) -> np.ndarray:
+def load_mask_from_shp(shp_file: Path, metad: dict) -> np.ndarray:
     """
     Load a mask containing geometries from a shapefile,
     using a reference dataset
@@ -416,9 +438,8 @@ def load_mask_from_shp(shp_file: Path, ref_ds: DatasetReader) -> np.ndarray:
     shp_file : str
         shapefile containing a polygon
 
-    ref_ds : DatasetReader
-        A rasterio dataset of the reference band
-        that fmask will be resampled
+    metad : dict
+        rasterio-style metadata dictionary
 
     Returns
     -------
@@ -432,14 +453,14 @@ def load_mask_from_shp(shp_file: Path, ref_ds: DatasetReader) -> np.ndarray:
     2) Exception is raised if no Polygon geometry exists
        in the shapefile
     """
-    with fiona.open(shp_file, "r") as shp:
-        shapes = [
-            feature["geometry"]
-            for feature in shp
-            if feature["geometry"]["type"] == "Polygon"
-        ]
+    sf = gpd.read_file(shp_file).to_crs(metad["crs"])
 
-    nshapes = len(shapes)
+    # extract non-empty polygons from the shapefile
+    geoms = [
+        g for g in sf.geometry if g.type.lower() == "polygon" and g.is_empty is False
+    ]
+
+    nshapes = len(geoms)
     if nshapes == 0:
         raise Exception("input shapefile does not have any 'Polygon' geometry")
 
@@ -450,9 +471,245 @@ def load_mask_from_shp(shp_file: Path, ref_ds: DatasetReader) -> np.ndarray:
             stacklevel=1,
         )
 
-    # pixels outside polygon in roi_mask = nodata value
-    mask_im, mask_transform = rasterio.mask.mask(dataset=ref_ds, shapes=shapes)
-    if mask_im.ndim == 3:
-        mask_im = np.array(mask_im[0, :, :], order="K", copy=True)
+    mask_im = rasterio.features.geometry_mask(
+        geoms,
+        out_shape=(metad["height"], metad["width"]),
+        transform=metad["transform"],
+        all_touched=False,
+        invert=True,
+    )
 
     return mask_im
+
+
+def quicklook_rgb(
+    rgb_bandlist: List[Path],
+    scale_factor: Union[float, int],
+    dwnscale_factor: float = 3,
+    mask_nodata: bool = False,
+) -> Tuple[np.ndarray, dict]:
+    """
+    Generate a quicklook from the sensor's RGB bands
+
+    Parameters
+    ----------
+    scale_factor : float or int
+        scale factor to convert integer values to reflectances
+
+    dwnscale_factor : float >= 1
+        The downscaling factor.
+        If dwnscale_factor = 3 then the spatial resolution
+        of the quicklook RGB will be reduced by a factor
+        of three from the native resolution of the sensors'
+        RGB bands.
+
+        If dwnscale_factor = 1 then no downscaling is
+        performed, thus the native resolution of the RGB
+        bands are used.
+
+        e.g. if dwnscale_factor = 3, then the 10 m RGB bands
+        will be downscaled to 30 m spatial resolution
+
+    mask_nodata : bool
+        Whether to set nodata pixels [< 0 or > scale_factor] to grey
+        in the quicklook RGB
+
+    Returns
+    -------
+    rgb_im : numpy.ndarray
+        RGB image with the following dimensions
+        [nrows, ncols, 3] for the three channels
+
+    rgb_meta : dict
+        Metadata dictionary taken from rasterio
+
+    Raises
+    ------
+    ValueError
+        * if dwnscale_factor < 1
+    """
+    if dwnscale_factor < 1:
+        raise ValueError("\ndwnscale_factor must be a float >= 1")
+
+    with rasterio.open(rgb_bandlist[0], "r") as ds:
+        ql_spatial_res = dwnscale_factor * float(ds.transform.a)
+
+    if dwnscale_factor > 1:
+        # resample to quicklook spatial resolution
+        resmpl_tifs, refl_im, rio_meta = resample_bands(
+            rgb_bandlist,
+            ql_spatial_res,
+            Resampling.nearest,
+            load=True,
+            save=False,
+            odir=None,
+        )
+    else:
+        refl_im, rio_meta = load_bands(rgb_bandlist, scale_factor, False)
+
+    # use NASA-OBPG SeaDAS's transformation to create a very pretty RGB
+    rgb_im = seadas_style_rgb(
+        refl_img=refl_im,
+        rgb_ix=[0, 1, 2],
+        scale_factor=scale_factor,
+        mask_nodata=mask_nodata,
+    )
+
+    rio_meta["band_1"] = rgb_bandlist[0].stem
+    rio_meta["band_2"] = rgb_bandlist[1].stem
+    rio_meta["band_3"] = rgb_bandlist[2].stem
+    rio_meta["dtype"] = rgb_im.dtype.name  # this should np.unit8
+
+    return rgb_im, rio_meta
+
+
+def quicklook_rgb_xr(
+    xarr: xr.Dataset,
+    rgb_varlist: List[str],
+    scale_factor: Union[float, int],
+    dwnscale_factor: float = 3,
+    mask_nodata: bool = False,
+) -> Tuple[np.ndarray, dict]:
+    """
+    Generate a quicklook RGB from an xarray object
+
+    Parameters
+    ----------
+    xarr : xr.Dataset
+        xarray dataset at a given instance, e.g.
+        xarr = parent_xarr.isel(time=XX)
+        where XX is the user specified time index
+
+    rgb_varlist : list
+        A list of variable names used to generate the RGB, e.g.
+        rgb_varlist = ["lmbskyg_red", "lmbskyg_green", "lmbskyg_blue"]
+
+    scale_factor : float or int
+        scale factor to convert integer values to reflectances
+
+    dwnscale_factor : float >= 1
+        The downscaling factor.
+        If dwnscale_factor = 3 then the spatial resolution
+        of the quicklook RGB will be reduced by a factor
+        of three from the native resolution of the sensors'
+        RGB bands.
+
+        If dwnscale_factor = 1 then no downscaling is
+        performed, thus the native resolution of the RGB
+        bands are used.
+
+    mask_nodata : bool
+        Whether to set nodata pixels [< 0 or > scale_factor] to grey
+        in the quicklook RGB
+
+    Returns
+    -------
+    rgb_im : numpy.ndarray
+        RGB image with the following dimensions
+        [nrows, ncols, 3] for the three channels
+
+    rgb_meta : dict
+        Metadata dictionary taken from rasterio
+
+    Raises
+    ------
+    ValueError
+        * if len(rgb_varlist) != 3
+        * if dwnscale_factor < 1
+    """
+    if len(rgb_varlist) != 3:
+        raise ValueError("rgb_bandlist must have three elements")
+
+    src_trans = xarr.affine
+    src_crs = CRS.from_string(xarr.attrs["crs"])
+
+    # compute the downsample transform matrix
+    dst_trans = src_trans * src_trans.scale(dwnscale_factor, dwnscale_factor)
+    dst_nrows = int(xarr.dims["y"] / dwnscale_factor)
+    dst_ncols = int(xarr.dims["x"] / dwnscale_factor)
+
+    # create a rasterio-style metadata dict for destination
+    # image. This will be needed in creating a shapefile
+    # from the matplotlib polygon
+
+    var_dtype = xarr.variables[rgb_varlist[0]].dtype
+    nodata = xarr.variables[rgb_varlist[0]].attrs["nodata"]
+
+    dst_meta = {
+        "transform": dst_trans,
+        "crs": src_crs,
+        "height": dst_nrows,
+        "width": dst_ncols,
+        "dtype": var_dtype.name,
+        "nodata": nodata,
+        "count": 3,
+        "driver": "GTiff",  # dummy
+    }
+
+    if dwnscale_factor > 1:
+
+        refl_im = np.zeros([3, dst_nrows, dst_ncols], order="C", dtype=var_dtype)
+
+        for z, varname in enumerate(rgb_varlist):
+            var_ds = xarr.variables[varname]
+
+            # resample
+            reproject(
+                source=var_ds.values,
+                destination=refl_im[z, :, :],
+                src_transform=src_trans,
+                src_crs=src_crs,
+                src_nodata=nodata,
+                dst_transform=dst_trans,
+                dst_crs=src_crs,  # keep the same projection
+                dst_nodata=nodata,
+                resampling=Resampling.nearest,
+            )
+
+    else:
+        # dwnscale_factor = 1. This is likely to be memory intensive
+        refl_im = np.array(
+            [
+                xarr.variables[rgb_varlist[0]].values,
+                xarr.variables[rgb_varlist[1]].values,
+                xarr.variables[rgb_varlist[2]].values,
+            ],
+            order="C",
+        )
+
+    # use NASA-OBPG SeaDAS's transformation to create a very pretty RGB
+    rgb_im = seadas_style_rgb(
+        refl_img=refl_im,
+        rgb_ix=[0, 1, 2],
+        scale_factor=scale_factor,
+        mask_nodata=mask_nodata,
+    )
+
+    return rgb_im, dst_meta
+
+
+def create_roi_shp(shp_file: Path, rgb_im: np.ndarray, rgb_meta: dict):
+    """
+    Create a shapefile containing a polygon of a ROI that's selected
+    using the interactive quicklook RGB
+
+    Parameters
+    ----------
+    shp_file : Path
+        shapefile containing a polygon
+
+    rgb_im : np.ndarray
+        RGB image with dimensions of [nrows, ncols, 3]
+
+    rgb_meta : dict
+        A rasterio style metadata dict.
+    """
+    # let the user select a ROI from the quicklook RGB
+    mc = RoiSelector(rgb_im=rgb_im)
+    mc.interative()
+
+    # write a shapefile
+    mc.verts_to_shp(metadata=rgb_meta, shp_file=shp_file)
+
+    # close the RoiSelector
+    mc = None

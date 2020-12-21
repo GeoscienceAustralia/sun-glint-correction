@@ -12,7 +12,9 @@ import pytest
 import rasterio
 import numpy as np
 from pathlib import Path
+
 from sungc import deglint
+from sungc.rasterio_funcs import quicklook_rgb
 
 # specify the path to the odc_metadata.yaml of the test datasets
 odc_meta_file = (
@@ -20,8 +22,8 @@ odc_meta_file = (
     / "data/ga_ls8c_aard_3-2-0_091086_2014-11-06_final.odc-metadata.yaml"
 )
 
-# specify the product
-product = "lmbadj"
+# specify the sub_product
+sub_product = "lmbadj"
 
 
 def test_quicklook_gen(tmp_path):
@@ -29,10 +31,14 @@ def test_quicklook_gen(tmp_path):
     Test that the quicklook rgb is as expected
     """
     dwnscale_factor = 3
-    g = deglint.GlintCorr(odc_meta_file, product)
+    g = deglint.GlintCorr(odc_meta_file, sub_product)
 
     # generate a quicklook
-    rgb_im, rgb_meta = g.quicklook_rgb(dwnscale_factor=dwnscale_factor)
+    rgb_im, rgb_meta = quicklook_rgb(
+        rgb_bandlist=g.rgb_bandlist,
+        scale_factor=g.scale_factor,
+        dwnscale_factor=dwnscale_factor,
+    )
 
     rgb_shape = rgb_im.shape
 
@@ -58,6 +64,10 @@ def test_quicklook_gen(tmp_path):
         assert rgb_meta["transform"].e == b3_meta["transform"].e * dwnscale_factor
 
     # check Exception is raised if dwnscale_factor < 1
-    with pytest.raises(Exception) as excinfo:
-        g.quicklook_rgb(dwnscale_factor=0.999)
+    with pytest.raises(ValueError) as excinfo:
+        quicklook_rgb(
+            rgb_bandlist=g.rgb_bandlist,
+            scale_factor=g.scale_factor,
+            dwnscale_factor=0.999,
+        )
     assert "dwnscale_factor must be a float >= 1" in str(excinfo)

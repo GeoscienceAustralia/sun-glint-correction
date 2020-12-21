@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
 import numpy as np
+from typing import Union, Tuple
 
 
-def generate_tiles(samples, lines, xtile=None, ytile=None):
+def generate_tiles(
+    samples: int, lines: int, xtile=Union[None, int], ytile=Union[None, int]
+) -> Tuple:
     """
     Generates a list of tile indices for a 2D array. Taken from
     https://github.com/GeoscienceAustralia/wagl/blob/water-atcor/wagl/tiling.py

@@ -18,6 +18,7 @@ Note:
       - test_fake_shp()
       - test_failure_point_shp()
 
+    * quicklook_rgb() was tested in test_quicklook_rgb.py
 """
 import pytest
 import rasterio
@@ -321,9 +322,7 @@ def test_singleval_7():
         test_arr = np.zeros([100, 100], order="C", dtype=np.float32)
         test_arr.fill(nodata)
 
-        with pytest.raises(Exception) as excinfo:
-            rio_funcs.check_image_singleval(test_arr, nodata, "test_arr")
-        assert "only contains a single value" in str(excinfo)
+        assert rio_funcs.check_singleval(test_arr, nodata) is True
 
 
 def test_load_singleband_8():
