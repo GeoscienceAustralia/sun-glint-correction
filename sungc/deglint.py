@@ -1472,7 +1472,7 @@ class GlintCorr:
             dxr_list.append(dxr)
 
         # cleanup
-        if tmpdir is not None
+        if tmpdir is not None:
             tmpdir.cleanup()
 
         # endfor res
