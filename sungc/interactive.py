@@ -132,7 +132,7 @@ class RoiSelector(object):
         canvas.mpl_connect("key_press_event", self.key_press_callback)
         canvas.mpl_connect("motion_notify_event", self.motion_notify_callback)
         self.canvas = canvas
-        plt.show()
+        plt.show(block=True)
 
     def default_vertices(self, ax: matplotlib.axes.Axes) -> tuple:
         """
